@@ -1055,83 +1055,115 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        // 1. Find native ST controls
-        let $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-        if (!$container.length) $container = sourceImage.parent();
+        const $message = sourceImage.closest('.mes_text');
+        let $mediaContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$mediaContainer.length) $mediaContainer = sourceImage.parent();
+        let $controlsWrapper = $mediaContainer.parent();
+
+        // Safely locate the next and prev buttons
+        let $prev = $controlsWrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
+        let $next = $controlsWrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
         
-        // Search up to the wrapper for controls, or grab siblings
-        let $sourceElements = $container.parent().find('.hover-menu, .media-controls, .image-controls, [class*="control"]').not('.kazuma-lightbox-controls');
-        if (!$sourceElements.length) {
-            $sourceElements = $container.children().not('img, picture, video, a');
-        }
-        
-        // 2. Extract the prompt (stored in title)
+        // Fallback to searching the whole message if not found in immediate parent
+        if (!$prev.length) $prev = $message.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
+        if (!$next.length) $next = $message.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
+
         const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
         
-        // Even if there are no source elements, if we have a prompt, we should create the controls wrapper
-        if ($sourceElements.length || promptText) {
-            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-            
-            if ($sourceElements.length) {
-                $clonedControls.append($sourceElements.clone(true, true));
-            }
-            
-            if (promptText) {
-                // Add the prompt text as an overlay
-                const $promptOverlay = $('<div></div>').css({
-                    position: 'absolute',
-                    bottom: '20px',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    background: 'rgba(0,0,0,0.7)',
-                    color: 'white',
-                    padding: '10px 15px',
-                    borderRadius: '8px',
-                    maxWidth: '80%',
-                    textAlign: 'center',
-                    fontSize: '14px',
-                    pointerEvents: 'auto',
-                    zIndex: 2147483647,
-                    fontFamily: 'sans-serif'
-                }).text(promptText);
-                $clonedControls.append($promptOverlay);
-            }
-            
-            $clonedControls.css({
-                position: 'absolute',
-                top: 0, left: 0, right: 0, bottom: 0,
-                pointerEvents: 'none', // wrapper is passthrough
-                zIndex: 2147483647,
-                display: 'block'
-            });
-            
-            // Force cloned buttons to be visible and clickable
-            $clonedControls.find('*').not($promptOverlay).css({
-                opacity: 1, 
-                visibility: 'visible', 
-                pointerEvents: 'auto'
-            });
-            
-            $clonedControls.children().not($promptOverlay).each(function() {
-                if ($(this).css('display') === 'none') {
-                    $(this).css('display', 'flex');
-                }
-            });
+        const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+        $clonedControls.css({
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            pointerEvents: 'none',
+            zIndex: 2147483647,
+            display: 'block'
+        });
 
-            $clonedControls.on('click', '*', function(e) {
+        // Create explicit floating PREV button
+        if ($prev.length) {
+            const $clonedPrev = $prev.clone(false, false).removeAttr('id').css({
+                position: 'absolute',
+                left: '20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                pointerEvents: 'auto',
+                opacity: 1,
+                visibility: 'visible',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '24px',
+                background: 'rgba(0,0,0,0.6)',
+                padding: '15px',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                color: 'white',
+                border: '2px solid rgba(255,255,255,0.2)'
+            });
+            $clonedPrev.on('click', function(e) {
                 e.stopPropagation();
+                $prev.click(); // trigger original
                 updateModalImg();
             });
+            $clonedControls.append($clonedPrev);
+        }
 
-            // Target the best container to append to
-            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
-            if ($target.length) {
-                if ($target.css('position') === 'static') $target.css('position', 'relative');
-                $target.append($clonedControls);
-            } else {
-                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
-                $modal.append($clonedControls);
-            }
+        // Create explicit floating NEXT button
+        if ($next.length) {
+            const $clonedNext = $next.clone(false, false).removeAttr('id').css({
+                position: 'absolute',
+                right: '20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                pointerEvents: 'auto',
+                opacity: 1,
+                visibility: 'visible',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '24px',
+                background: 'rgba(0,0,0,0.6)',
+                padding: '15px',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                color: 'white',
+                border: '2px solid rgba(255,255,255,0.2)'
+            });
+            $clonedNext.on('click', function(e) {
+                e.stopPropagation();
+                $next.click(); // trigger original
+                updateModalImg();
+            });
+            $clonedControls.append($clonedNext);
+        }
+
+        if (promptText) {
+            const $promptOverlay = $('<div></div>').css({
+                position: 'absolute',
+                bottom: '20px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.7)',
+                color: 'white',
+                padding: '10px 15px',
+                borderRadius: '8px',
+                maxWidth: '80%',
+                textAlign: 'center',
+                fontSize: '14px',
+                pointerEvents: 'auto',
+                zIndex: 2147483647,
+                fontFamily: 'sans-serif'
+            }).text(promptText);
+            $clonedControls.append($promptOverlay);
+        }
+
+        const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+        if ($target.length) {
+            if ($target.css('position') === 'static') $target.css('position', 'relative');
+            $target.append($clonedControls);
+        } else {
+            if ($modal.css('position') === 'static') $modal.css('position', 'relative');
+            $modal.append($clonedControls);
         }
 
         // --- Swipe functionality (Top-Level Native Capturing) ---
@@ -1142,9 +1174,7 @@ function applyWorkflowState(state) {
         if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
 
         window._kazumaTouchStart = function(e) {
-            // Only hijack if touching inside the active modal
             if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            
             if (e.changedTouches) {
                 touchStartX = e.changedTouches[0].screenX;
             }
@@ -1152,15 +1182,11 @@ function applyWorkflowState(state) {
 
         window._kazumaTouchEnd = function(e) {
             if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            
             if (e.changedTouches) {
                 touchEndX = e.changedTouches[0].screenX;
                 const threshold = 40;
-                let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-                if (!$wrapper.length) $wrapper = sourceImage.parent();
                 
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $wrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
                     if ($next.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $next.click(); 
@@ -1168,7 +1194,6 @@ function applyWorkflowState(state) {
                     }
                 }
                 else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $wrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
                     if ($prev.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $prev.click(); 
@@ -1189,6 +1214,12 @@ function applyWorkflowState(state) {
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
                         if ($currentImg.length) sourceImage = $currentImg;
+                        
+                        // Update prompt text if it changed
+                        const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
+                        if (newPrompt) {
+                            $clonedControls.find('div').last().text(newPrompt);
+                        }
                     }
                 }
             }, 100);
