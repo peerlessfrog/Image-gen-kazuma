@@ -1153,23 +1153,23 @@ function applyWorkflowState(state) {
         if ($appendTarget.css('position') === 'static') $appendTarget.css('position', 'relative');
         $appendTarget.append($clonedControls);
 
-        // --- Hover Visibility Logic ---
-        if (window.matchMedia("(pointer: coarse)").matches) {
-            // Touch devices: keep controls permanently visible
-            $clonedControls.css('opacity', 1);
-        } else {
-            // Desktop: Start hidden, reveal on hover
-            const $promptText = $modal.find('.img_enlarged_title').parent();
-            $promptText.css({ opacity: 0, transition: 'opacity 0.2s ease-in-out' });
-            
-            $appendTarget.off('mouseenter.kazuma').on('mouseenter.kazuma', function() {
-                $clonedControls.css('opacity', 1);
-                $modal.find('.img_enlarged_title').parent().css('opacity', 1);
-            }).off('mouseleave.kazuma').on('mouseleave.kazuma', function() {
-                $clonedControls.css('opacity', 0);
-                $modal.find('.img_enlarged_title').parent().css('opacity', 0);
-            });
+        // --- Instant Native CSS Hover Logic ---
+        if (!$('#kazuma-lightbox-css').length) {
+            $('head').append(`
+                <style id="kazuma-lightbox-css">
+                    .kazuma-lightbox-controls { opacity: 0; transition: opacity 0.15s ease-in-out; }
+                    .popup-content:hover .kazuma-lightbox-controls,
+                    .img_enlarged_container:hover .kazuma-lightbox-controls,
+                    .kazuma-lightbox-controls:hover { opacity: 1; }
+                    @media (pointer: coarse) {
+                        .kazuma-lightbox-controls { opacity: 1 !important; }
+                    }
+                </style>
+            `);
         }
+
+        // Prevent native browser drag-and-drop on the image when we mouse-swipe
+        $modalImg.on('dragstart', function(e) { e.preventDefault(); });
 
         // --- Universal Swipe/Drag functionality ---
         let startX = 0, isDragging = false;
@@ -1224,7 +1224,7 @@ function applyWorkflowState(state) {
         function updateModalImg() {
             setTimeout(() => {
                 if (sourceImage && sourceImage.length) {
-                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img').first();
+                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img:visible').not('.kazuma-lightbox-controls img').first();
                     const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
