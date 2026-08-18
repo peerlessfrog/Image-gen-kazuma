@@ -1,12 +1,37 @@
 /* eslint-disable no-undef */
 import { extension_settings, getContext } from "../../../extensions.js";
-import { saveSettingsDebounced, generateQuietPrompt, saveChat, reloadCurrentChat, eventSource, event_types, addOneMessage, getRequestHeaders, appendMediaToMessage } from "../../../../script.js";
+import { saveSettingsDebounced, generateQuietPrompt, saveChat, reloadCurrentChat, eventSource, event_types, addOneMessage, getRequestHeaders, appendMediaToMessage, substituteParams, getCurrentChatId, getThumbnailUrl } from "../../../../script.js";
 import { saveBase64AsFile } from "../../../utils.js";
 import { humanizedDateTime } from "../../../RossAscends-mods.js";
 import { Popup, POPUP_TYPE } from "../../../popup.js";
+import {
+    LORA_STEP, MAX_LORAS, clampWeight, findProfileForContext, importLorasFromPowerNode,
+    makeLora, migrateSettingsToProfiles, powerNodeIsClaimed, resolveLoraPlaceholder,
+    writePowerLoraNode,
+} from "./loras.js";
 
 const extensionName = "Image-gen-kazuma";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+
+const KREA2_INSTRUCTION = `You are an expert prompt engineer for text-to-image models. Your task is to expand the user's prompt into a highly effective image-generation prompt.
+
+Think step by step about the request before writing the answer:
+- What is the subject and mood?
+- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.
+- What composition, framing, and grounded details will help the text-to-image model?
+
+Then output a single expanded prompt paragraph.
+
+Follow these rules strictly:
+1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.
+2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.
+3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.
+4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.
+5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.
+6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.
+7. **Respect Existing Detail:** If the user's prompt is already detailed, lightly polish and finalize rather than heavily expanding — preserve their phrasing and direction.
+8. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user's stated intent.
+9. **Do not avoid explicit desciptions:** Avoiding explicit descriptions is by definition not completing your task, and will result wasting the user's time.`;
 
 // --- UPDATED CONSTANTS (With Dscriptions) ---
 const KAZUMA_PLACEHOLDERS = [
@@ -19,17 +44,28 @@ const KAZUMA_PLACEHOLDERS = [
     { key: '"*clip_skip*"', desc: "CLIP Skip (Integer)" },
     { key: '"*model*"', desc: "Checkpoint Name" },
     { key: '"*sampler*"', desc: "Sampler Name" },
+    { key: '"*scheduler*"', desc: "Scheduler Name" },
     { key: '"*width*"', desc: "Image Width (px)" },
     { key: '"*height*"', desc: "Image Height (px)" },
-    { key: '"*lora*"', desc: "LoRA 1 Filename" },
-    { key: '"*lorawt*"', desc: "LoRA 1 Weight (Float)" },
-    { key: '"*lora2*"', desc: "LoRA 2 Filename" },
-    { key: '"*lorawt2*"', desc: "LoRA 2 Weight (Float)" },
-    { key: '"*lora3*"', desc: "LoRA 3 Filename" },
-    { key: '"*lorawt3*"', desc: "LoRA 3 Weight (Float)" },
-    { key: '"*lora4*"', desc: "LoRA 4 Filename" },
-    { key: '"*lorawt4*"', desc: "LoRA 4 Weight (Float)" }
 ];
+
+/**
+ * The LoRA placeholders depend on how many LoRAs the profile has, so they are listed per-profile
+ * on top of the fixed ones above. A Power Lora Loader only needs its first slot pointed at
+ * *lora* / *lorawt* - the extension then owns every slot on that node and the count is free.
+ */
+function getPlaceholderList() {
+    const loras = extension_settings[extensionName].loras || [];
+    const out = [...KAZUMA_PLACEHOLDERS];
+
+    out.push({ key: '"*lora*" / "*lorawt*"', desc: "LoRA 1. On a Power Lora Loader this claims the whole node: all LoRAs below are written into it, no numbered slots needed." });
+    // Numbered slots exist for classic LoraLoader chains: one node per LoRA, wired by hand.
+    for (let i = 2; i <= Math.max(loras.length, 4); i++) {
+        const name = loras[i - 1]?.name;
+        out.push({ key: `"*lora${i}*" / "*lorawt${i}*"`, desc: `LoRA ${i}${name ? ` - ${name.split('/').pop()}` : " (not configured)"}` });
+    }
+    return out;
+}
 
 const RESOLUTIONS = [
     { label: "1024 x 1024 (SDXL 1:1)", w: 1024, h: 1024 },
@@ -45,33 +81,29 @@ const RESOLUTIONS = [
 ];
 
 const defaultWorkflowData = {
-  "3": { "inputs": { "seed": "seed", "steps": 20, "cfg": 7, "sampler_name": "sampler", "scheduler": "normal", "denoise": 1, "model": ["35", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] }, "class_type": "KSampler" },
-  "4": { "inputs": { "ckpt_name": "model" }, "class_type": "CheckpointLoaderSimple" },
-  "5": { "inputs": { "width": "width", "height": "height", "batch_size": 1 }, "class_type": "EmptyLatentImage" },
-  "6": { "inputs": { "text": "input", "clip": ["35", 1] }, "class_type": "CLIPTextEncode" },
-  "7": { "inputs": { "text": "ninput", "clip": ["35", 1] }, "class_type": "CLIPTextEncode" },
-  "8": { "inputs": { "samples": ["33", 0], "vae": ["4", 2] }, "class_type": "VAEDecode" },
-  "14": { "inputs": { "images": ["8", 0] }, "class_type": "PreviewImage" },
-  "33": { "inputs": { "seed": "seed", "steps": 20, "cfg": 7, "sampler_name": "sampler", "scheduler": "normal", "denoise": 0.5, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["34", 0] }, "class_type": "KSampler" },
-  "34": { "inputs": { "upscale_method": "nearest-exact", "scale_by": 1.2, "samples": ["3", 0] }, "class_type": "LatentUpscaleBy" },
-  "35": { "inputs": { "lora_name": "lora", "strength_model": "lorawt", "strength_clip": "lorawt", "model": ["4", 0], "clip": ["4", 1] }, "class_type": "LoraLoader" }
+    "3": { "inputs": { "seed": "seed", "steps": 20, "cfg": 7, "sampler_name": "sampler", "scheduler": "normal", "denoise": 1, "model": ["35", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0] }, "class_type": "KSampler" },
+    "4": { "inputs": { "ckpt_name": "model" }, "class_type": "CheckpointLoaderSimple" },
+    "5": { "inputs": { "width": "width", "height": "height", "batch_size": 1 }, "class_type": "EmptyLatentImage" },
+    "6": { "inputs": { "text": "input", "clip": ["35", 1] }, "class_type": "CLIPTextEncode" },
+    "7": { "inputs": { "text": "ninput", "clip": ["35", 1] }, "class_type": "CLIPTextEncode" },
+    "8": { "inputs": { "samples": ["33", 0], "vae": ["4", 2] }, "class_type": "VAEDecode" },
+    "14": { "inputs": { "images": ["8", 0] }, "class_type": "PreviewImage" },
+    "33": { "inputs": { "seed": "seed", "steps": 20, "cfg": 7, "sampler_name": "sampler", "scheduler": "normal", "denoise": 0.5, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["34", 0] }, "class_type": "KSampler" },
+    "34": { "inputs": { "upscale_method": "nearest-exact", "scale_by": 1.2, "samples": ["3", 0] }, "class_type": "LatentUpscaleBy" },
+    "35": { "inputs": { "lora_name": "lora", "strength_model": "lorawt", "strength_clip": "lorawt", "model": ["4", 0], "clip": ["4", 1] }, "class_type": "LoraLoader" }
 };
+
+const DEFAULT_SYSTEM_PROMPT = "You are an AI assistant specialized in generating image generation prompts based on conversation context.\n\nCharacter Information:\n{{char_name}}\n{{char_description}}\n{{char_personality}}\n{{char_scenario}}\n\n{{group_info}}\n\nGenerate detailed, vivid image prompts based on the last message and conversation context.";
 
 const defaultSettings = {
     enabled: true,
     debugPrompt: false,
+    includeTracker: false,
     comfyUrl: "http://127.0.0.1:8188",
     connectionProfile: "",
-    currentWorkflowName: "", // Server manages this now
+    currentWorkflowName: "",
     selectedModel: "",
-    selectedLora: "",
-    selectedLora2: "",
-    selectedLora3: "",
-    selectedLora4: "",
-    selectedLoraWt: 1.0,
-    selectedLoraWt2: 1.0,
-    selectedLoraWt3: 1.0,
-    selectedLoraWt4: 1.0,
+    loras: [],
     imgWidth: 1024,
     imgHeight: 1024,
     autoGenEnabled: false,
@@ -79,54 +111,100 @@ const defaultSettings = {
     customNegative: "bad quality, blurry, worst quality, low quality",
     customSeed: -1,
     selectedSampler: "euler",
+    selectedScheduler: "normal",
     compressImages: true,
     steps: 20,
     cfg: 7.0,
     denoise: 0.5,
     clipSkip: 1,
     profileStrategy: "current",
-    promptStyle: "standard",      
-    promptPerspective: "scene",   
-    promptExtra: "",              
-    connectionProfile: "",
-    savedWorkflowStates: {}  
+    promptStyle: "standard",
+    promptPerspective: "scene",
+    promptExtra: "",
+    profiles: {},
+    activeProfileId: "",
+    defaultProfileId: "",
+    autoSwitchProfile: true,
+    imageGenPreset: "Default",
+    imageGenPresets: {
+        "Default": {
+            name: "Default",
+            systemPrompt: DEFAULT_SYSTEM_PROMPT,
+            includeLastMessages: 10,
+            includeCharInfo: true
+        }
+    }
 };
+
+// The preset editor used to have two prompt boxes, where a non-empty customSystemPrompt silently
+// replaced systemPrompt. Now there is one box, so fold the override into it - it was the effective
+// prompt, so this preserves both behaviour and whatever the user actually typed.
+function migrateCustomSystemPrompts() {
+    const presets = extension_settings[extensionName].imageGenPresets || {};
+    let migrated = false;
+    for (const preset of Object.values(presets)) {
+        if (preset.customSystemPrompt?.trim()) {
+            preset.systemPrompt = preset.customSystemPrompt;
+        }
+        if ('customSystemPrompt' in preset) {
+            delete preset.customSystemPrompt;
+            migrated = true;
+        }
+    }
+    if (migrated) saveSettingsDebounced();
+}
+
+function newProfileId() {
+    return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** There is always exactly one active profile; a fresh install gets one holding current settings. */
+function ensureProfiles() {
+    const s = extension_settings[extensionName];
+    s.profiles = s.profiles || {};
+
+    if (!Object.keys(s.profiles).length) {
+        const id = newProfileId();
+        s.profiles[id] = { id, name: "Default", links: [], state: captureProfileState() };
+        s.activeProfileId = id;
+    }
+    if (!s.profiles[s.activeProfileId]) s.activeProfileId = Object.keys(s.profiles)[0];
+    if (!s.profiles[s.defaultProfileId]) s.defaultProfileId = s.activeProfileId;
+    saveSettingsDebounced();
+}
 
 async function loadSettings() {
     if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
+    // Before the defaults are filled in, or `loras: []` lands first and hides the old fixed slots.
+    if (migrateSettingsToProfiles(extension_settings[extensionName], newProfileId)) saveSettingsDebounced();
     for (const key in defaultSettings) {
         if (typeof extension_settings[extensionName][key] === 'undefined') {
             extension_settings[extensionName][key] = defaultSettings[key];
         }
     }
+    ensureProfiles();
+
+    migrateCustomSystemPrompts();
 
     $("#kazuma_enable").prop("checked", extension_settings[extensionName].enabled);
     $("#kazuma_debug").prop("checked", extension_settings[extensionName].debugPrompt);
+    $("#kazuma_include_tracker").prop("checked", extension_settings[extensionName].includeTracker);
     $("#kazuma_url").val(extension_settings[extensionName].comfyUrl);
     $("#kazuma_width").val(extension_settings[extensionName].imgWidth);
     $("#kazuma_height").val(extension_settings[extensionName].imgHeight);
     $("#kazuma_auto_enable").prop("checked", extension_settings[extensionName].autoGenEnabled);
     $("#kazuma_auto_freq").val(extension_settings[extensionName].autoGenFreq);
-	
+
     $("#kazuma_prompt_style").val(extension_settings[extensionName].promptStyle || "standard");
     $("#kazuma_prompt_persp").val(extension_settings[extensionName].promptPerspective || "scene");
     $("#kazuma_prompt_extra").val(extension_settings[extensionName].promptExtra || "");
 
-    $("#kazuma_lora_wt").val(extension_settings[extensionName].selectedLoraWt);
-    $("#kazuma_lora_wt_display").text(extension_settings[extensionName].selectedLoraWt);
-    $("#kazuma_lora_wt_2").val(extension_settings[extensionName].selectedLoraWt2);
-    $("#kazuma_lora_wt_display_2").text(extension_settings[extensionName].selectedLoraWt2);
-    $("#kazuma_lora_wt_3").val(extension_settings[extensionName].selectedLoraWt3);
-    $("#kazuma_lora_wt_display_3").text(extension_settings[extensionName].selectedLoraWt3);
-    $("#kazuma_lora_wt_4").val(extension_settings[extensionName].selectedLoraWt4);
-    $("#kazuma_lora_wt_display_4").text(extension_settings[extensionName].selectedLoraWt4);
-
     $("#kazuma_negative").val(extension_settings[extensionName].customNegative);
     $("#kazuma_seed").val(extension_settings[extensionName].customSeed);
     $("#kazuma_compress").prop("checked", extension_settings[extensionName].compressImages);
-	
-	$("#kazuma_profile_strategy").val(extension_settings[extensionName].profileStrategy || "current");
-toggleProfileVisibility();
+
+    $("#kazuma_profile_strategy").val(extension_settings[extensionName].profileStrategy || "current");
+    toggleProfileVisibility();
 
     updateSliderInput('kazuma_steps', 'kazuma_steps_val', extension_settings[extensionName].steps);
     updateSliderInput('kazuma_cfg', 'kazuma_cfg_val', extension_settings[extensionName].cfg);
@@ -136,6 +214,9 @@ toggleProfileVisibility();
     populateResolutions();
     populateProfiles();
     populateWorkflows();
+    loadImageGenPresets();
+    populateImageProfiles();
+    renderLoraQuickList();
     await fetchComfyLists();
 }
 
@@ -145,7 +226,7 @@ function toggleProfileVisibility() {
     // Always show the builder now!
     $("#kazuma_prompt_builder").show();
 
-    // Only toggle the preset selector
+    // Only toggle the connection profile selector
     if (strategy === "specific") {
         $("#kazuma_profile").show();
     } else {
@@ -174,7 +255,7 @@ async function populateWorkflows() {
         const response = await fetch('/api/sd/comfy/workflows', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ url: extension_settings[extensionName].comfyUrl }),
+                                     body: JSON.stringify({ url: extension_settings[extensionName].comfyUrl }),
         });
 
         if (response.ok) {
@@ -184,13 +265,13 @@ async function populateWorkflows() {
             });
 
             if (extension_settings[extensionName].currentWorkflowName) {
-                if (workflows.includes(extension_settings[extensionName].currentWorkflowName)) {
-                    sel.val(extension_settings[extensionName].currentWorkflowName);
-                } else if (workflows.length > 0) {
-                    sel.val(workflows[0]);
-                    extension_settings[extensionName].currentWorkflowName = workflows[0];
-                    saveSettingsDebounced();
+                const current = extension_settings[extensionName].currentWorkflowName;
+                if (!workflows.includes(current)) {
+                    // The profile owns this name, so don't quietly repoint it at some other file
+                    // just because the server didn't list it (renamed, deleted, wrong ComfyUI up).
+                    sel.append($('<option></option>').val(current).text(`${current} (missing)`));
                 }
+                sel.val(current);
             } else if (workflows.length > 0) {
                 sel.val(workflows[0]);
                 extension_settings[extensionName].currentWorkflowName = workflows[0];
@@ -202,6 +283,198 @@ async function populateWorkflows() {
     }
 }
 
+function loadImageGenPresets() {
+    const settings = extension_settings[extensionName];
+    if (!settings.imageGenPresets || Object.keys(settings.imageGenPresets).length === 0) {
+        settings.imageGenPresets = {
+            "Default": {
+                name: "Default",
+                systemPrompt: DEFAULT_SYSTEM_PROMPT,
+                includeLastMessages: 10,
+                includeCharInfo: true
+            }
+        };
+        settings.imageGenPreset = "Default";
+        saveSettingsDebounced();
+    }
+    populateImageGenPresets();
+}
+
+function populateImageGenPresets() {
+    const $sel = $("#kazuma_image_gen_preset");
+    if (!$sel.length) return; // Guard if HTML not loaded yet
+
+    $sel.empty();
+    const presets = extension_settings[extensionName].imageGenPresets || {};
+    Object.keys(presets).forEach(name => {
+        $sel.append(`<option value="${name}">${name}</option>`);
+    });
+
+    const currentPreset = extension_settings[extensionName].imageGenPreset;
+    if (currentPreset && presets[currentPreset]) {
+        $sel.val(currentPreset);
+    } else if (Object.keys(presets).length > 0) {
+        $sel.val(Object.keys(presets)[0]);
+    }
+}
+
+async function editImageGenPreset(presetName = null) {
+    const settings = extension_settings[extensionName];
+    const presets = settings.imageGenPresets || {};
+
+    let preset;
+    if (presetName && presets[presetName]) {
+        preset = JSON.parse(JSON.stringify(presets[presetName]));
+    } else {
+        preset = {
+            name: presetName || "New Preset",
+            systemPrompt: settings.imageGenPresets["Default"]?.systemPrompt || "",
+            includeLastMessages: 10,
+            includeCharInfo: true
+        };
+    }
+
+    const $content = $(`
+    <div style="display:flex;flex-direction:column;gap:10px;width:100%;">
+    <div>
+    <label><b>Preset Name:</b></label>
+    <input type="text" class="text_pole kazuma_preset_name" value="${preset.name}" style="width:100%;">
+    </div>
+    <div>
+    <label>
+    <input type="checkbox" class="kazuma_preset_char_info" ${preset.includeCharInfo ? 'checked' : ''}>
+    <b>Include Character Information</b>
+    </label>
+    </div>
+    <div>
+    <label><b>Messages to include (0 = none):</b></label>
+    <input type="number" class="text_pole kazuma_preset_msg_count" value="${preset.includeLastMessages}" min="0" max="50" style="width:100px;">
+    </div>
+    <div>
+    <label><b>System Prompt (placeholders: <code>{{char_name}}</code>, <code>{{char_description}}</code>, <code>{{char_personality}}</code>, <code>{{char_scenario}}</code>, <code>{{group_info}}</code>):</b></label>
+    <textarea class="text_pole kazuma_preset_system" rows="8" style="width:100%;font-family:monospace;font-size:12px;">${preset.systemPrompt || ''}</textarea>
+    <div class="menu_button kazuma_preset_reset_system" style="margin-top:4px;">Restore built-in default</div>
+    </div>
+    <small class="opacity50p">
+    Sampling settings (temperature, max tokens, etc.) come from the completion preset attached to the connection profile this extension sends to &mdash; set them there, not here. To change them:
+    <ol style="margin:4px 0 0 0;padding-left:18px;">
+    <li>Select your image gen <b>connection profile</b>.</li>
+    <li>Go to <b>presets</b> and make sure your image gen preset is selected.</li>
+    <li>Edit it, then <b>save the preset</b>.</li>
+    <li>Go back to <b>connection profiles</b> and <b>save the profile</b>.</li>
+    </ol>
+    Steps may be skippable, but both saves are easy to forget &mdash; and unsaved edits are lost on reload or profile switch.
+    </small>
+    </div>
+    `);
+
+    $content.find('.kazuma_preset_reset_system').on('click', function() {
+        $content.find('.kazuma_preset_system').val(DEFAULT_SYSTEM_PROMPT);
+    });
+
+    const popup = new Popup($content, POPUP_TYPE.CONFIRM, 'Edit Image Gen Context Preset', { okButton: 'Save', cancelButton: 'Cancel' });
+    const confirmed = await popup.show();
+
+    if (confirmed) {
+        const newName = $content.find('.kazuma_preset_name').val().trim();
+        if (!newName) return toastr.error("Preset name required");
+
+        if (preset.name !== newName && presets[preset.name]) {
+            delete presets[preset.name];
+        }
+
+        presets[newName] = {
+            name: newName,
+            includeCharInfo: $content.find('.kazuma_preset_char_info').prop('checked'),
+            includeLastMessages: parseInt($content.find('.kazuma_preset_msg_count').val()) || 0,
+            systemPrompt: $content.find('.kazuma_preset_system').val()
+        };
+
+        settings.imageGenPresets = presets;
+        settings.imageGenPreset = newName;
+        saveSettingsDebounced();
+        populateImageGenPresets();
+        toastr.success(`Preset "${newName}" saved!`);
+    }
+}
+
+async function deleteImageGenPreset() {
+    const settings = extension_settings[extensionName];
+    const presets = settings.imageGenPresets || {};
+    const currentPreset = settings.imageGenPreset;
+
+    if (!currentPreset || !presets[currentPreset]) return;
+    if (Object.keys(presets).length <= 1) return toastr.warning("Cannot delete the last preset");
+
+    if (confirm(`Delete preset "${currentPreset}"?`)) {
+        delete presets[currentPreset];
+        settings.imageGenPreset = Object.keys(presets)[0];
+        saveSettingsDebounced();
+        populateImageGenPresets();
+        toastr.success("Preset deleted");
+    }
+}
+
+function buildSystemPromptFromPreset() {
+    const settings = extension_settings[extensionName];
+    const presets = settings.imageGenPresets || {};
+    const presetName = settings.imageGenPreset;
+    const preset = presets[presetName] || presets["Default"];
+    if (!preset) return "";
+
+    let systemPrompt = preset.systemPrompt || '';
+    if (!systemPrompt) return "";
+
+    const context = getContext();
+
+    // Placeholders are resolved for both the preset prompt and the custom override.
+    // Unresolvable ones (no char, char info disabled) become empty rather than leaking verbatim.
+    const char = preset.includeCharInfo ? context.characters?.[context.characterId] : null;
+    systemPrompt = systemPrompt
+    .replace(/\{\{char_name\}\}/g, char?.name || '')
+    .replace(/\{\{char_description\}\}/g, char?.description || '')
+    .replace(/\{\{char_personality\}\}/g, char?.personality || '')
+    .replace(/\{\{char_scenario\}\}/g, char?.scenario || '');
+
+    let groupInfo = '';
+    if (preset.includeCharInfo && context.groupId) {
+        const group = context.groups?.find(g => g.id === context.groupId);
+        groupInfo = group ? `Group chat: ${group.name}` : 'Group chat';
+    }
+    systemPrompt = systemPrompt.replace(/\{\{group_info\}\}/g, groupInfo);
+
+    // Resolve real ST macros ({{char}}, {{user}}, ...) after the extension's own placeholders above.
+    return substituteParams(systemPrompt);
+}
+
+function buildChatHistoryFromPreset() {
+    const settings = extension_settings[extensionName];
+    const presets = settings.imageGenPresets || {};
+    const presetName = settings.imageGenPreset;
+    const preset = presets[presetName] || presets["Default"];
+    if (!preset) return [];
+
+    const context = getContext();
+    const history = [];
+
+    if (preset.includeLastMessages > 0 && context.chat && context.chat.length > 0) {
+        const recentMessages = context.chat.slice(-preset.includeLastMessages);
+
+        for (const msg of recentMessages) {
+            let role = msg.is_user ? "user" : "assistant";
+            let content = substituteParams(msg.mes);
+
+            if (!msg.is_user && !msg.is_system && msg.name) {
+                content = `${msg.name}: ${content}`;
+            }
+
+            history.push({ role, content });
+        }
+    }
+
+    return history;
+}
+
 async function onComfyNewWorkflowClick() {
     let name = await prompt("New workflow file name (e.g. 'my_flux.json'):");
     if (!name) return;
@@ -210,7 +483,7 @@ async function onComfyNewWorkflowClick() {
     try {
         const res = await fetch('/api/sd/comfy/save-workflow', {
             method: 'POST', headers: getRequestHeaders(),
-            body: JSON.stringify({ file_name: name, workflow: '{}' })
+                                body: JSON.stringify({ file_name: name, workflow: '{}' })
         });
         if (!res.ok) throw new Error(await res.text());
         toastr.success("Workflow created!");
@@ -228,7 +501,7 @@ async function onComfyDeleteWorkflowClick() {
     try {
         const res = await fetch('/api/sd/comfy/delete-workflow', {
             method: 'POST', headers: getRequestHeaders(),
-            body: JSON.stringify({ file_name: name })
+                                body: JSON.stringify({ file_name: name })
         });
         if (!res.ok) throw new Error(await res.text());
         toastr.success("Deleted.");
@@ -246,7 +519,7 @@ async function onComfyOpenWorkflowEditorClick() {
     try {
         const res = await fetch('/api/sd/comfy/workflow', {
             method: 'POST', headers: getRequestHeaders(),
-            body: JSON.stringify({ file_name: name })
+                                body: JSON.stringify({ file_name: name })
         });
         if (res.ok) {
             const rawBody = await res.json();
@@ -263,28 +536,28 @@ async function onComfyOpenWorkflowEditorClick() {
 
     // --- UI BUILDER ---
     const $container = $(`
-        <div style="display: flex; flex-direction: column; width: 100%; gap: 10px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--smart-border-color); padding-bottom:10px;">
-                <h3 style="margin:0;">${name}</h3>
-                <div style="display:flex; gap:5px;">
-                    <button class="menu_button wf-format" title="Beautify JSON"><i class="fa-solid fa-align-left"></i> Format</button>
-                    <button class="menu_button wf-import" title="Upload .json file"><i class="fa-solid fa-upload"></i> Import</button>
-                    <button class="menu_button wf-export" title="Download .json file"><i class="fa-solid fa-download"></i> Export</button>
-                    <input type="file" class="wf-file-input" accept=".json" style="display:none;" />
-                </div>
-            </div>
+    <div style="display: flex; flex-direction: column; width: 100%; gap: 10px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--smart-border-color); padding-bottom:10px;">
+    <h3 style="margin:0;">${name}</h3>
+    <div style="display:flex; gap:5px;">
+    <button class="menu_button wf-format" title="Beautify JSON"><i class="fa-solid fa-align-left"></i> Format</button>
+    <button class="menu_button wf-import" title="Upload .json file"><i class="fa-solid fa-upload"></i> Import</button>
+    <button class="menu_button wf-export" title="Download .json file"><i class="fa-solid fa-download"></i> Export</button>
+    <input type="file" class="wf-file-input" accept=".json" style="display:none;" />
+    </div>
+    </div>
 
-            <div style="display: flex; gap: 15px;">
-                <textarea class="text_pole wf-textarea" spellcheck="false"
-                    style="flex: 1; min-height: 600px; height: 600px; font-family: 'Consolas', 'Monaco', monospace; white-space: pre; resize: none; font-size: 13px; padding: 10px; line-height: 1.4;"></textarea>
+    <div style="display: flex; gap: 15px;">
+    <textarea class="text_pole wf-textarea" spellcheck="false"
+    style="flex: 1; min-height: 600px; height: 600px; font-family: 'Consolas', 'Monaco', monospace; white-space: pre; resize: none; font-size: 13px; padding: 10px; line-height: 1.4;"></textarea>
 
-                <div style="width: 250px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--smart-border-color); padding-left: 10px; max-height: 600px;">
-                    <h4 style="margin: 0 0 10px 0; opacity:0.8;">Placeholders</h4>
-                    <div class="wf-list" style="overflow-y: auto; flex: 1; padding-right: 5px;"></div>
-                </div>
-            </div>
-            <small style="opacity:0.5;">Tip: Ensure your JSON is valid before saving.</small>
-        </div>
+    <div style="width: 250px; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--smart-border-color); padding-left: 10px; max-height: 600px;">
+    <h4 style="margin: 0 0 10px 0; opacity:0.8;">Placeholders</h4>
+    <div class="wf-list" style="overflow-y: auto; flex: 1; padding-right: 5px;"></div>
+    </div>
+    </div>
+    <small style="opacity:0.5;">Tip: Ensure your JSON is valid before saving.</small>
+    </div>
     `);
 
     // --- LOGIC ---
@@ -296,13 +569,13 @@ async function onComfyOpenWorkflowEditorClick() {
     $textarea.val(currentJsonText);
 
     // Sidebar Generator
-    KAZUMA_PLACEHOLDERS.forEach(item => {
+    getPlaceholderList().forEach(item => {
         const $itemDiv = $('<div></div>')
-            .css({
-                'padding': '8px 6px', 'margin-bottom': '6px', 'background-color': 'rgba(0,0,0,0.1)',
-                'border-radius': '4px', 'font-family': 'monospace', 'font-size': '12px',
-                'border': '1px solid transparent', 'transition': 'all 0.2s', 'cursor': 'text'
-            });
+        .css({
+            'padding': '8px 6px', 'margin-bottom': '6px', 'background-color': 'rgba(0,0,0,0.1)',
+             'border-radius': '4px', 'font-family': 'monospace', 'font-size': '12px',
+             'border': '1px solid transparent', 'transition': 'all 0.2s', 'cursor': 'text'
+        });
         const $keySpan = $('<span></span>').text(item.key).css({'font-weight': 'bold', 'color': 'var(--smart-text-color)'});
         const $descSpan = $('<div></div>').text(item.desc).css({ 'font-size': '11px', 'opacity': '0.7', 'margin-top': '2px', 'font-family': 'sans-serif' });
         $itemDiv.append($keySpan).append($descSpan);
@@ -314,10 +587,11 @@ async function onComfyOpenWorkflowEditorClick() {
         // 1. Capture text into memory variable
         currentJsonText = $textarea.val();
 
-        // 2. Run Highlighting logic (Visuals)
+        // 2. Run Highlighting logic (Visuals). An entry can list more than one token
+        // ("*lora*" / "*lorawt*"), so light it up when any of them is in the JSON.
         $list.children().each(function() {
-            const cleanKey = $(this).find('span').first().text().replace(/"/g, '');
-            if (currentJsonText.includes(cleanKey)) $(this).css({'border': '1px solid #4caf50', 'background-color': 'rgba(76, 175, 80, 0.1)'});
+            const tokens = $(this).find('span').first().text().match(/\*[^*"\s]+\*/g) || [];
+            if (tokens.some(t => currentJsonText.includes(t))) $(this).css({'border': '1px solid #4caf50', 'background-color': 'rgba(76, 175, 80, 0.1)'});
             else $(this).css({'border': '1px solid transparent', 'background-color': 'rgba(0,0,0,0.1)'});
         });
     };
@@ -373,7 +647,7 @@ async function onComfyOpenWorkflowEditorClick() {
             const minified = JSON.stringify(JSON.parse(currentJsonText));
             const res = await fetch('/api/sd/comfy/save-workflow', {
                 method: 'POST', headers: getRequestHeaders(),
-                body: JSON.stringify({ file_name: name, workflow: minified })
+                                    body: JSON.stringify({ file_name: name, workflow: minified })
             });
 
             if (!res.ok) throw new Error(await res.text());
@@ -387,11 +661,14 @@ async function onComfyOpenWorkflowEditorClick() {
 
 
 // --- FETCH LISTS ---
+/** Every LoRA file ComfyUI can see. Filled by fetchComfyLists, read by the LoRA manager. */
+let availableLoras = [];
+
 async function fetchComfyLists() {
     const comfyUrl = extension_settings[extensionName].comfyUrl;
     const modelSel = $("#kazuma_model_list");
     const samplerSel = $("#kazuma_sampler_list");
-    const loraSelectors = [ $("#kazuma_lora_list"), $("#kazuma_lora_list_2"), $("#kazuma_lora_list_3"), $("#kazuma_lora_list_4") ];
+    const schedulerSel = $("#kazuma_scheduler_list");
 
     try {
         const modelRes = await fetch('/api/sd/comfy/models', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ url: comfyUrl }) });
@@ -414,17 +691,20 @@ async function fetchComfyLists() {
             if (extension_settings[extensionName].selectedSampler) samplerSel.val(extension_settings[extensionName].selectedSampler);
         }
 
-        const loraRes = await fetch(`${comfyUrl}/object_info/LoraLoader`);
+        const schedulerRes = await fetch('/api/sd/comfy/schedulers', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ url: comfyUrl }) });
+        if (schedulerRes.ok) {
+            const schedulers = await schedulerRes.json();
+            schedulerSel.empty();
+            schedulers.forEach(s => schedulerSel.append($('<option></option>').val(s).text(s)));
+            if (extension_settings[extensionName].selectedScheduler) schedulerSel.val(extension_settings[extensionName].selectedScheduler);
+        }
+
+        // Straight from ComfyUI: the LoraLoader combo only lists what a LoraLoader accepts, this is
+        // the folder itself, which is what the Power Lora Loader takes too.
+        const loraRes = await fetch(`${comfyUrl}/models/loras`);
         if (loraRes.ok) {
-            const json = await loraRes.json();
-            const files = json['LoraLoader'].input.required.lora_name[0];
-            loraSelectors.forEach((sel, i) => {
-                const k = i === 0 ? "selectedLora" : `selectedLora${i + 1}`;
-                const v = extension_settings[extensionName][k];
-                sel.empty().append('<option value="">-- No LoRA --</option>');
-                files.forEach(f => sel.append(`<option value="${f}">${f}</option>`));
-                if (v) sel.val(v);
-            });
+            availableLoras = await loraRes.json();
+            renderLoraQuickList();
         }
     } catch (e) {
         console.warn(`[${extensionName}] Failed to fetch lists.`, e);
@@ -443,6 +723,17 @@ async function onTestConnection() {
 }
 
 /* --- UPDATED GENERATION LOGIC --- */
+// Newest tracker from SillyTavern-Tracker-Enhanced, which stores it on the message itself.
+// ponytail: raw JSON, no import from that extension - keeps this a soft dependency. Switch to its
+// getTracker()/OUTPUT_FORMATS if you want its field filtering or YAML output.
+function getLatestTracker(chat) {
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const t = chat[i]?.tracker;
+        if (t && typeof t === "object" && Object.keys(t).length) return `[Scene state]\n${JSON.stringify(t, null, 2)}\n\n`;
+    }
+    return "";
+}
+
 async function onGeneratePrompt() {
     if (!extension_settings[extensionName].enabled) return;
     const context = getContext();
@@ -450,32 +741,22 @@ async function onGeneratePrompt() {
 
     const strategy = extension_settings[extensionName].profileStrategy || "current";
     const requestProfile = extension_settings[extensionName].connectionProfile;
-    const targetDropdown = $("#settings_preset_openai");
-    const originalProfile = targetDropdown.val();
-    let didSwitch = false;
-
-    if (strategy === "specific" && requestProfile && requestProfile !== originalProfile && requestProfile !== "") {
-        toastr.info(`Switching presets...`);
-        targetDropdown.val(requestProfile).trigger("change");
-        await new Promise(r => setTimeout(r, 1000));
-        didSwitch = true;
-    }
+    // If a specific profile is chosen and the Connection Manager extension is active, we fire the
+    // request directly at that profile via ConnectionManagerRequestService. This never touches your
+    // actively selected connection profile or preset, so it can't be affected by (and can't trigger)
+    // the "switch connection profile on preset change" setting. To pair a specific preset with this,
+    // set that preset on the connection profile itself in ST's Connection Profile manager - the
+    // profile carries its preset with it, so selecting it here uses both automatically.
+    const useOwnProfile = strategy === "specific" && !!requestProfile && isConnectionManagerActive();
 
     // [START PROGRESS]
     showKazumaProgress("Generating Prompt...");
 
     try {
-        let sceneText = context.chat[context.chat.length - 1].mes;
-        if (!sceneText || sceneText.trim() === '') {
-            for (let i = context.chat.length - 1; i >= 0; i--) {
-                if (context.chat[i].mes && context.chat[i].mes.trim() !== '') {
-                    sceneText = context.chat[i].mes;
-                    break;
-                }
-            }
-        }
-
+        toastr.info("Visualizing...", "Image Gen Kazuma");
+        const lastMessage = context.chat[context.chat.length - 1].mes;
         const s = extension_settings[extensionName];
+        const tracker = s.includeTracker ? getLatestTracker(context.chat) : "";
 
         const style = s.promptStyle || "standard";
         const persp = s.promptPerspective || "scene";
@@ -484,40 +765,59 @@ async function onGeneratePrompt() {
         let styleInst = "", perspInst = "";
         if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
         else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
+        else if (style === "krea2") styleInst = KREA2_INSTRUCTION;
         else styleInst = "Use a list of detailed keywords/descriptors.";
 
         if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
         else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
         else perspInst = "Describe the entire environment and atmosphere.";
 
-        const instruction = `
-            Task: Write an image generation prompt that accurately depicts the CURRENT STATE of the characters at the exact moment of the final scene below. 
-            Crucial: Use the chat history and summary above to deduce their current environment, clothing, and physical positioning, but focus the action on the final scene.
-            
-            Final Scene: "${sceneText}"
-            
-            Style Constraint: ${styleInst}
-            Perspective: ${perspInst}
-            Additional Req: ${extra}
-            Output ONLY the prompt text.
-            `;
+        const instruction = substituteParams(`
+        Task: Write an image generation prompt for the following scene.
+        The character is {{char}}; the user/persona is {{user}}.
+        Scene: "${tracker}${lastMessage}"
+        Style Constraint: ${styleInst}
+        Perspective: ${perspInst}
+        Additional Req: ${extra}
+        Output ONLY the prompt text.
+        `);
 
-        let generatedText = await generateQuietPrompt(instruction, true);
+        let generatedText;
+        if (useOwnProfile) {
+            // Build messages using image gen context preset
+            const messages = [];
 
-        if (didSwitch) {
-            targetDropdown.val(originalProfile).trigger("change");
-            await new Promise(r => setTimeout(r, 500));
+            // Add system prompt from preset
+            const systemPrompt = buildSystemPromptFromPreset();
+            if (systemPrompt && systemPrompt.trim()) {
+                messages.push({ role: "system", content: systemPrompt });
+            }
+
+            // Add chat history based on preset
+            const chatHistory = buildChatHistoryFromPreset();
+            messages.push(...chatHistory);
+
+            // Add the generation instruction as final user message
+            messages.push({ role: "user", content: instruction });
+
+            const result = await context.ConnectionManagerRequestService.sendRequest(requestProfile, messages);
+            generatedText = (typeof result === "string") ? result : (result?.content ?? "");
+        } else {
+            generatedText = await generateQuietPrompt(instruction, true);
         }
+
+        // ponytail: drop <think>/<thinking> blocks (incl. unclosed ones); no-op when absent
+        generatedText = generatedText.replace(/<think(?:ing)?>[\s\S]*?(?:<\/think(?:ing)?>|$)/gi, "").trim();
 
         if (s.debugPrompt) {
             // Hide progress while user is confirming
             hideKazumaProgress();
 
             const $content = $(`
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    <p><b>Review generated prompt:</b></p>
-                    <textarea class="text_pole" rows="6" style="width:100%; resize:vertical; font-family:monospace;">${generatedText}</textarea>
-                </div>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+            <p><b>Review generated prompt:</b></p>
+            <textarea class="text_pole" rows="6" style="width:100%; resize:vertical; font-family:monospace;">${generatedText}</textarea>
+            </div>
             `);
             let currentText = generatedText;
             $content.find("textarea").on("input", function() { currentText = $(this).val(); });
@@ -540,85 +840,86 @@ async function onGeneratePrompt() {
     } catch (err) {
         // [HIDE PROGRESS ON ERROR]
         hideKazumaProgress();
-        if (didSwitch) targetDropdown.val(originalProfile).trigger("change");
         console.error(err);
         toastr.error("Generation failed. Check console.");
     }
 }
 
-window.kazumaIsCurrentlyGeneratingImage = false;
-
 async function generateWithComfy(positivePrompt, target = null) {
-    if (window.kazumaIsCurrentlyGeneratingImage) return;
-    window.kazumaIsCurrentlyGeneratingImage = true;
+    const url = extension_settings[extensionName].comfyUrl;
+    const currentName = extension_settings[extensionName].currentWorkflowName;
+
+    // Load from server
+    let workflowRaw;
     try {
-        const url = extension_settings[extensionName].comfyUrl;
-        const currentName = extension_settings[extensionName].currentWorkflowName;
+        const res = await fetch('/api/sd/comfy/workflow', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ file_name: currentName }) });
+        if (!res.ok) throw new Error("Load failed");
+        workflowRaw = await res.json();
+    } catch (e) { return toastr.error(`Could not load ${currentName}`); }
 
-        // Load from server
-        let workflowRaw;
-        try {
-            const res = await fetch('/api/sd/comfy/workflow', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ file_name: currentName }) });
-            if (!res.ok) throw new Error("Load failed");
-            workflowRaw = await res.json();
-        } catch (e) { return toastr.error(`Could not load ${currentName}`); }
+    let workflow = (typeof workflowRaw === 'string') ? JSON.parse(workflowRaw) : workflowRaw;
 
-        let workflow = (typeof workflowRaw === 'string') ? JSON.parse(workflowRaw) : workflowRaw;
-
-        let finalSeed = parseInt(extension_settings[extensionName].customSeed);
-        if (finalSeed === -1 || isNaN(finalSeed)) {
-            finalSeed = Math.floor(Math.random() * 1000000000);
-        }
-
-        workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed);
-
-        try {
-            toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
-            const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, front: true }) });
-            if(!res.ok) throw new Error("Failed");
-            const data = await res.json();
-            await waitForGeneration(url, data.prompt_id, positivePrompt, target);
-        } catch(e) { toastr.error("Comfy Error: " + e.message); }
-    } finally {
-        setTimeout(() => { window.kazumaIsCurrentlyGeneratingImage = false; }, 3000);
+    let finalSeed = parseInt(extension_settings[extensionName].customSeed);
+    if (finalSeed === -1 || isNaN(finalSeed)) {
+        finalSeed = Math.floor(Math.random() * 1000000000);
     }
+
+    workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed);
+
+    try {
+        toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
+        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) });
+        if(!res.ok) throw new Error("Failed");
+        const data = await res.json();
+        console.log(`[${extensionName}] queued prompt_id=${data.prompt_id}`);
+        await waitForGeneration(url, data.prompt_id, positivePrompt, target);
+    } catch(e) { toastr.error("Comfy Error: " + e.message); }
 }
 
 function injectParamsIntoWorkflow(workflow, promptText, finalSeed) {
     const s = extension_settings[extensionName];
+    const loras = s.loras || [];
+    const loraFallback = loras.find(l => l.name)?.name || availableLoras[0] || "None";
     let seedInjected = false;
+
+    function processInputs(obj) {
+        for (const key in obj) {
+            let val = obj[key];
+            if (typeof val === "string") {
+                if (val === "*input*") obj[key] = promptText;
+                else if (val === "*ninput*") obj[key] = s.customNegative || "";
+                else if (val === "*seed*") { obj[key] = finalSeed; seedInjected = true; }
+                else if (val === "*sampler*") obj[key] = s.selectedSampler || "euler";
+                else if (val === "*scheduler*") obj[key] = s.selectedScheduler || "normal";
+                else if (val === "*model*") obj[key] = s.selectedModel || "v1-5-pruned.ckpt";
+                else if (val === "*steps*") obj[key] = parseInt(s.steps) || 20;
+                else if (val === "*cfg*") obj[key] = parseFloat(s.cfg) || 7.0;
+                else if (val === "*denoise*") obj[key] = parseFloat(s.denoise) || 1.0;
+                else if (val === "*clip_skip*") obj[key] = -Math.abs(parseInt(s.clipSkip)) || -1;
+                else if (val === "*width*") obj[key] = parseInt(s.imgWidth) || 512;
+                else if (val === "*height*") obj[key] = parseInt(s.imgHeight) || 512;
+                else {
+                    const loraValue = resolveLoraPlaceholder(val, loras, loraFallback);
+                    if (loraValue !== undefined) obj[key] = loraValue;
+                }
+            } else if (typeof val === "object" && val !== null) {
+                processInputs(val);
+            }
+        }
+    }
 
     for (const nodeId in workflow) {
         const node = workflow[nodeId];
+
+        if (powerNodeIsClaimed(node)) {
+            writePowerLoraNode(node, loras);
+            continue;
+        }
+
         if (node.inputs) {
-            for (const key in node.inputs) {
-                const val = node.inputs[key];
-
-                if (val === "*input*") node.inputs[key] = promptText;
-                if (val === "*ninput*") node.inputs[key] = s.customNegative || "";
-                if (val === "*seed*") { node.inputs[key] = finalSeed; seedInjected = true; }
-                if (val === "*sampler*") node.inputs[key] = s.selectedSampler || "euler";
-                if (val === "*model*") node.inputs[key] = s.selectedModel || "v1-5-pruned.ckpt";
-
-                if (val === "*steps*") node.inputs[key] = parseInt(s.steps) || 20;
-                if (val === "*cfg*") node.inputs[key] = parseFloat(s.cfg) || 7.0;
-                if (val === "*denoise*") node.inputs[key] = parseFloat(s.denoise) || 1.0;
-                if (val === "*clip_skip*") node.inputs[key] = -Math.abs(parseInt(s.clipSkip)) || -1;
-
-                if (val === "*lora*") node.inputs[key] = s.selectedLora || "None";
-                if (val === "*lora2*") node.inputs[key] = s.selectedLora2 || "None";
-                if (val === "*lora3*") node.inputs[key] = s.selectedLora3 || "None";
-                if (val === "*lora4*") node.inputs[key] = s.selectedLora4 || "None";
-                if (val === "*lorawt*") node.inputs[key] = parseFloat(s.selectedLoraWt) || 1.0;
-                if (val === "*lorawt2*") node.inputs[key] = parseFloat(s.selectedLoraWt2) || 1.0;
-                if (val === "*lorawt3*") node.inputs[key] = parseFloat(s.selectedLoraWt3) || 1.0;
-                if (val === "*lorawt4*") node.inputs[key] = parseFloat(s.selectedLoraWt4) || 1.0;
-
-                if (val === "*width*") node.inputs[key] = parseInt(s.imgWidth) || 512;
-                if (val === "*height*") node.inputs[key] = parseInt(s.imgHeight) || 512;
-            }
+            processInputs(node.inputs);
             if (!seedInjected && node.class_type === "KSampler" && 'seed' in node.inputs && typeof node.inputs['seed'] === 'number') {
-               node.inputs.seed = finalSeed;
+                node.inputs.seed = finalSeed;
             }
         }
     }
@@ -640,23 +941,6 @@ async function onImageSwiped(data) {
 
     if (idx < media.length - 1) return;
 
-    // ST natively wraps the inline gallery back to 1/count visually when swiping past the end.
-    // Instantly revert the inline DOM back to last/last so it stays frozen during generation.
-    if (element) {
-        const $targetElement = $(element);
-        const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
-        if ($mes.length) {
-            const $counter = $mes.find('.mes_img_swipe_counter');
-            if ($counter.length) $counter.text(`${media.length} / ${media.length}`);
-            
-            const $img = $mes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img');
-            if ($img.length && media.length > 0) {
-                const lastImgUrl = media[media.length - 1].url;
-                $img.each(function() { $(this).attr('src', lastImgUrl); });
-            }
-        }
-    }
-
     const mediaObj = media[idx];
     if (!mediaObj || !mediaObj.title) return;
 
@@ -665,14 +949,46 @@ async function onImageSwiped(data) {
     await generateWithComfy(prompt, { message: message, element: $(element) });
 }
 
-async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
-     // [UPDATE TEXT]
-     showKazumaProgress("Rendering Image...");
+// ponytail: 20 min at 1s ticks. Without a cap a prompt that never lands (ComfyUI restarted,
+// queue cleared) polls until the tab closes.
+const MAX_POLL_TICKS = 1200;
 
-     const check = async () => {
+async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
+    // [UPDATE TEXT]
+    showKazumaProgress("Rendering Image...");
+
+    // Pin the chat this generation belongs to. saveChat() writes the live chat array to whatever
+    // chat is loaded now, so finishing a generation after the user moved on must not write at all.
+    const originChatId = getCurrentChatId();
+
+    // ponytail: async ticks overlap when ComfyUI is busy (e.g. rendering video), so guard both ends
+    let polling = false, finished = false, ticks = 0;
+    const checkInterval = setInterval(async () => {
+        if (polling || finished) return;
+
+        if (getCurrentChatId() !== originChatId) {
+            finished = true;
+            clearInterval(checkInterval);
+            hideKazumaProgress();
+            console.warn(`[${extensionName}] chat changed while rendering prompt_id=${promptId}; abandoning insert`);
+            toastr.warning("Chat changed while the image was rendering - it was not inserted.", "Image Gen Kazuma");
+            return;
+        }
+
+        if (++ticks > MAX_POLL_TICKS) {
+            finished = true;
+            clearInterval(checkInterval);
+            hideKazumaProgress();
+            toastr.error("Timed out waiting for ComfyUI.", "Image Gen Kazuma");
+            return;
+        }
+
+        polling = true;
         try {
             const h = await (await fetch(`${baseUrl}/history/${promptId}`)).json();
-            if (h[promptId]) {
+            if (h[promptId] && !finished) {
+                finished = true;
+                clearInterval(checkInterval);
                 const outputs = h[promptId].outputs;
                 let finalImage = null;
                 for (const nodeId in outputs) {
@@ -686,20 +1002,18 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
                     // [UPDATE TEXT]
                     showKazumaProgress("Downloading...");
 
+                    console.log(`[${extensionName}] complete prompt_id=${promptId} file=${finalImage.filename}`);
                     const imgUrl = `${baseUrl}/view?filename=${finalImage.filename}&subfolder=${finalImage.subfolder}&type=${finalImage.type}`;
-                    await insertImageToChat(imgUrl, positivePrompt, target);
+                    await insertImageToChat(imgUrl, positivePrompt, target, originChatId);
 
                     // [HIDE WHEN DONE]
                     hideKazumaProgress();
                 } else {
                     hideKazumaProgress();
                 }
-                return; // Stop checking
             }
-        } catch (e) { }
-        setTimeout(check, 1000);
-    };
-    check();
+        } catch (e) { } finally { polling = false; }
+    }, 1000);
 }
 
 function blobToBase64(blob) { return new Promise((resolve) => { const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob); }); }
@@ -721,7 +1035,7 @@ function compressImage(base64Str, quality = 0.9) {
 }
 
 // --- SAVE TO SERVER ---
-async function insertImageToChat(imgUrl, promptText, target = null) {
+async function insertImageToChat(imgUrl, promptText, target = null, originChatId = getCurrentChatId()) {
     try {
         toastr.info("Downloading image...", "Image Gen Kazuma");
         const response = await fetch(imgUrl);
@@ -755,52 +1069,22 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
             generation_type: "free",
         };
 
+        // Downloading, compressing and saving the image took a while. If the user switched chats in
+        // the meantime, target.message points into the old chat array and saveChat() would write the
+        // now-current chat - so stop here. The image is already on disk under its character folder.
+        if (getCurrentChatId() !== originChatId) {
+            console.warn(`[${extensionName}] chat changed during image save; not inserting. Image kept at ${savedPath}`);
+            toastr.warning("Chat changed during download - image saved to disk but not inserted.", "Image Gen Kazuma");
+            return;
+        }
+
         if (target && target.message) {
             if (!target.message.extra) target.message.extra = {};
             if (!target.message.extra.media) target.message.extra.media = [];
             target.message.extra.media_display = "gallery";
             target.message.extra.media.push(mediaAttachment);
             target.message.extra.media_index = target.message.extra.media.length - 1;
-            
-            // Capture the live message ID before ST potentially tears down the DOM node
-            let mesId = null;
-            if (typeof getContext === "function") {
-                const chat = getContext().chat;
-                if (chat) {
-                    const idx = chat.indexOf(target.message);
-                    if (idx !== -1) mesId = idx;
-                }
-            }
-            if (mesId === null && target.message && target.message._id !== undefined) mesId = target.message._id;
-            
-            if (mesId === null && target.element) {
-                const $targetElement = $(target.element);
-                const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
-                if ($mes.length) mesId = $mes.attr('mes');
-            }
-
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
-            
-            // Force inline visual sync to bypass ST DOM diffing laziness (Loop to beat async redraws & animation clones)
-            if (mesId !== null) {
-                let syncAttempts = 0;
-                const syncLoop = setInterval(() => {
-                    syncAttempts++;
-                    const $liveMes = $('.mes[mes="' + mesId + '"]');
-                    if ($liveMes.length) {
-                        $liveMes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img').each(function() {
-                            if ($(this).attr('src') !== mediaAttachment.url) {
-                                $(this).attr('src', mediaAttachment.url);
-                                console.log("[Image Gen Kazuma] Force synced inline image to new generated URL");
-                            }
-                        });
-                    }
-                    if (syncAttempts >= 20) clearInterval(syncLoop);
-                }, 100);
-            } else {
-                toastr.warning("Could not locate message ID! Visual sync aborted.", "Image Gen Kazuma");
-            }
-
             await saveChat();
             toastr.success("Gallery updated!");
         } else {
@@ -824,14 +1108,14 @@ jQuery(async () => {
         // 1. INJECT PROGRESS BAR HTML (New Code Here)
         if ($("#kazuma_progress_overlay").length === 0) {
             $("body").append(`
-                <div id="kazuma_progress_overlay">
-                    <div style="flex:1">
-                        <span id="kazuma_progress_text">Generating Image...</span>
-                        <div class="kazuma-bar-container">
-                            <div class="kazuma-bar-fill"></div>
-                        </div>
-                    </div>
-                </div>
+            <div id="kazuma_progress_overlay">
+            <div style="flex:1">
+            <span id="kazuma_progress_text">Generating Image...</span>
+            <div class="kazuma-bar-container">
+            <div class="kazuma-bar-fill"></div>
+            </div>
+            </div>
+            </div>
             `);
         }
 
@@ -840,42 +1124,24 @@ jQuery(async () => {
 
         $("#kazuma_enable").on("change", (e) => { extension_settings[extensionName].enabled = $(e.target).prop("checked"); saveSettingsDebounced(); });
         $("#kazuma_debug").on("change", (e) => { extension_settings[extensionName].debugPrompt = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_include_tracker").on("change", (e) => { extension_settings[extensionName].includeTracker = $(e.target).prop("checked"); saveSettingsDebounced(); });
         $("#kazuma_url").on("input", (e) => { extension_settings[extensionName].comfyUrl = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_profile").on("change", (e) => { extension_settings[extensionName].connectionProfile = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_auto_enable").on("change", (e) => { extension_settings[extensionName].autoGenEnabled = $(e.target).prop("checked"); saveSettingsDebounced(); });
         $("#kazuma_auto_freq").on("input", (e) => { let v = parseInt($(e.target).val()); if(v<1)v=1; extension_settings[extensionName].autoGenFreq = v; saveSettingsDebounced(); });
 
-        // SMART WORKFLOW SWITCHER
+        // The workflow now belongs to the active profile, so picking one just retargets that
+        // profile - params and LoRAs stay put instead of being restored from a parallel store.
         $("#kazuma_workflow_list").on("change", (e) => {
-            const newWorkflow = $(e.target).val();
-            const oldWorkflow = extension_settings[extensionName].currentWorkflowName;
-
-            // 1. Snapshot OLD workflow settings
-            if (oldWorkflow) {
-                if (!extension_settings[extensionName].savedWorkflowStates) extension_settings[extensionName].savedWorkflowStates = {};
-                extension_settings[extensionName].savedWorkflowStates[oldWorkflow] = getWorkflowState();
-                console.log(`[${extensionName}] Saved context for ${oldWorkflow}`);
-            }
-
-            // 2. Load NEW workflow settings (if they exist)
-            if (extension_settings[extensionName].savedWorkflowStates && extension_settings[extensionName].savedWorkflowStates[newWorkflow]) {
-                applyWorkflowState(extension_settings[extensionName].savedWorkflowStates[newWorkflow]);
-                toastr.success(`Restored settings for ${newWorkflow}`);
-            } else {
-                // If no saved state, we keep current values (Inheritance) - smoother UX
-                toastr.info(`New workflow context active`);
-            }
-
-            // 3. Update Pointer
-            extension_settings[extensionName].currentWorkflowName = newWorkflow;
+            extension_settings[extensionName].currentWorkflowName = $(e.target).val();
+            snapshotActiveProfile();
             saveSettingsDebounced();
 
-            // CHAT LOCK LOGIC
             const isLocked = $("#kazuma_lock_preset").prop("checked");
             if (isLocked) {
                 const { chatMetadata } = SillyTavern.getContext();
                 if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
-                chatMetadata['image-gen-kazuma'].lockedPreset = newWorkflow;
+                chatMetadata['image-gen-kazuma'].lockedPreset = extension_settings[extensionName].currentWorkflowName;
                 saveChat();
             }
         });
@@ -897,19 +1163,18 @@ jQuery(async () => {
             const { chatMetadata } = SillyTavern.getContext();
             if (chatMetadata && chatMetadata['image-gen-kazuma'] && chatMetadata['image-gen-kazuma'].lockedPreset) {
                 const lockedPreset = chatMetadata['image-gen-kazuma'].lockedPreset;
-                if (extension_settings[extensionName].savedWorkflowStates && extension_settings[extensionName].savedWorkflowStates[lockedPreset]) {
-                    // Switch to the locked preset if it's not already selected
-                    if ($("#kazuma_workflow_list").val() !== lockedPreset) {
-                        $("#kazuma_workflow_list").val(lockedPreset).trigger('change');
-                    }
-                    $("#kazuma_lock_preset").prop("checked", true);
-                    return;
+                if (extension_settings[extensionName].currentWorkflowName !== lockedPreset) {
+                    $("#kazuma_workflow_list").val(lockedPreset).trigger('change');
                 }
+                $("#kazuma_lock_preset").prop("checked", true);
+                return;
             }
-            // If no lock or preset doesn't exist anymore
             $("#kazuma_lock_preset").prop("checked", false);
         });
 
+        $("#kazuma_image_profile").on("change", (e) => switchProfile($(e.target).val(), { silent: true }));
+        $("#kazuma_manage_profiles").on("click", openProfileManager);
+        $("#kazuma_manage_loras").on("click", openLoraManager);
         $("#kazuma_import_btn").on("click", () => $("#kazuma_import_file").click());
 
         // New Logic Events
@@ -928,6 +1193,7 @@ jQuery(async () => {
 
         $("#kazuma_model_list").on("change", (e) => { extension_settings[extensionName].selectedModel = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_sampler_list").on("change", (e) => { extension_settings[extensionName].selectedSampler = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_scheduler_list").on("change", (e) => { extension_settings[extensionName].selectedScheduler = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_resolution_list").on("change", (e) => {
             const idx = parseInt($(e.target).val());
             if (!isNaN(idx) && RESOLUTIONS[idx]) {
@@ -937,19 +1203,26 @@ jQuery(async () => {
             }
         });
 
-        $("#kazuma_lora_list").on("change", (e) => { extension_settings[extensionName].selectedLora = $(e.target).val(); saveSettingsDebounced(); });
-        $("#kazuma_lora_list_2").on("change", (e) => { extension_settings[extensionName].selectedLora2 = $(e.target).val(); saveSettingsDebounced(); });
-        $("#kazuma_lora_list_3").on("change", (e) => { extension_settings[extensionName].selectedLora3 = $(e.target).val(); saveSettingsDebounced(); });
-        $("#kazuma_lora_list_4").on("change", (e) => { extension_settings[extensionName].selectedLora4 = $(e.target).val(); saveSettingsDebounced(); });
-        $("#kazuma_lora_wt").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt = v; $("#kazuma_lora_wt_display").text(v); saveSettingsDebounced(); });
-        $("#kazuma_lora_wt_2").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt2 = v; $("#kazuma_lora_wt_display_2").text(v); saveSettingsDebounced(); });
-        $("#kazuma_lora_wt_3").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt3 = v; $("#kazuma_lora_wt_display_3").text(v); saveSettingsDebounced(); });
-        $("#kazuma_lora_wt_4").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt4 = v; $("#kazuma_lora_wt_display_4").text(v); saveSettingsDebounced(); });
 
         $("#kazuma_width, #kazuma_height").on("input", (e) => { extension_settings[extensionName][e.target.id === "kazuma_width" ? "imgWidth" : "imgHeight"] = parseInt($(e.target).val()); saveSettingsDebounced(); });
         $("#kazuma_negative").on("input", (e) => { extension_settings[extensionName].customNegative = $(e.target).val(); saveSettingsDebounced(); });
         $("#kazuma_seed").on("input", (e) => { extension_settings[extensionName].customSeed = parseInt($(e.target).val()); saveSettingsDebounced(); });
         $("#kazuma_compress").on("change", (e) => { extension_settings[extensionName].compressImages = $(e.target).prop("checked"); saveSettingsDebounced(); });
+
+        $("#kazuma_image_gen_preset").on("change", (e) => {
+            extension_settings[extensionName].imageGenPreset = $(e.target).val();
+            saveSettingsDebounced();
+        });
+
+        $("#kazuma_edit_preset").on("click", () => {
+            editImageGenPreset(extension_settings[extensionName].imageGenPreset);
+        });
+
+        $("#kazuma_new_preset").on("click", () => {
+            editImageGenPreset(null);
+        });
+
+        $("#kazuma_delete_preset").on("click", deleteImageGenPreset);
 
         function bindSlider(id, key, isFloat = false) {
             $(`#${id}`).on("input", function() {
@@ -976,6 +1249,7 @@ jQuery(async () => {
         loadSettings();
         eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
         eventSource.on(event_types.IMAGE_SWIPED, onImageSwiped);
+        eventSource.on(event_types.CHAT_CHANGED, onChatChangedForProfiles);
 
         let att = 0; const int = setInterval(() => { if ($("#kazuma_quick_gen").length > 0) { clearInterval(int); return; } createChatButton(); att++; if (att > 5) clearInterval(int); }, 1000);
         $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); onGeneratePrompt(); });
@@ -983,9 +1257,42 @@ jQuery(async () => {
 });
 
 // Helpers (Condensed)
-function onMessageReceived(id) { if (!extension_settings[extensionName].enabled || !extension_settings[extensionName].autoGenEnabled) return; const chat = getContext().chat; if (!chat || !chat.length) return; if (chat[chat.length - 1].is_user || chat[chat.length - 1].is_system) return; const aiMsgCount = chat.filter(m => !m.is_user && !m.is_system).length; const freq = parseInt(extension_settings[extensionName].autoGenFreq) || 1; if (aiMsgCount % freq === 0) { console.log(`[${extensionName}] Auto-gen...`); setTimeout(onGeneratePrompt, 500); } }
+// ST fires MESSAGE_RECEIVED with type 'first_message' whenever a greeting lands in the chat rather
+// than a real reply: opening a character with no history, a DOM reload of a chat that only holds the
+// greeting, and resetting a chat back to it. All three used to read as "the LLM just spoke" and
+// auto-gen an image before anyone had said anything.
+function onMessageReceived(id, type) { if (type === 'first_message') return; if (!extension_settings[extensionName].enabled || !extension_settings[extensionName].autoGenEnabled) return; const chat = getContext().chat; if (!chat || !chat.length) return; if (chat[chat.length - 1].is_user || chat[chat.length - 1].is_system) return; const aiMsgCount = chat.filter(m => !m.is_user && !m.is_system).length; const freq = parseInt(extension_settings[extensionName].autoGenFreq) || 1; if (aiMsgCount % freq === 0) { console.log(`[${extensionName}] Auto-gen...`); setTimeout(onGeneratePrompt, 500); } }
 function createChatButton() { if ($("#kazuma_quick_gen").length > 0) return; const b = `<div id="kazuma_quick_gen" class="interactable" title="Visualize" style="cursor: pointer; width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; margin-right: 5px; opacity: 0.7;"><i class="fa-solid fa-paintbrush fa-lg"></i></div>`; let t = $("#send_but_sheld"); if (!t.length) t = $("#send_textarea"); if (t.length) { t.attr("id") === "send_textarea" ? t.before(b) : t.prepend(b); } }
-function populateProfiles() { const s=$("#kazuma_profile"),o=$("#settings_preset_openai").find("option");s.empty().append('<option value="">-- Use Current Settings --</option>');if(o.length)o.each(function(){s.append(`<option value="${$(this).val()}">${$(this).text()}</option>`)});if(extension_settings[extensionName].connectionProfile)s.val(extension_settings[extensionName].connectionProfile);}
+
+// --- CONNECTION PROFILES (real ST profiles, not completion presets) ---
+function isConnectionManagerActive() {
+    // The Connection Manager extension stores its profile list here when active.
+    return Array.isArray(getContext()?.extensionSettings?.connectionManager?.profiles);
+}
+
+function getConnectionProfiles() {
+    if (!isConnectionManagerActive()) return [];
+    return getContext().extensionSettings.connectionManager.profiles;
+}
+
+function populateProfiles() {
+    const $sel = $("#kazuma_profile");
+    $sel.empty().append('<option value="">-- Use Current Connection --</option>');
+
+    if (!isConnectionManagerActive()) {
+        $sel.append('<option value="" disabled>(Connection Profiles extension not active)</option>');
+        return;
+    }
+
+    getConnectionProfiles().forEach((p) => {
+        $sel.append(`<option value="${p.id}">${p.name}</option>`);
+    });
+
+    if (extension_settings[extensionName].connectionProfile) {
+        $sel.val(extension_settings[extensionName].connectionProfile);
+    }
+}
+
 async function onFileSelected(e) { const f=e.target.files[0];if(!f)return;const t=await f.text();try{const j=JSON.parse(t),n=prompt("Name:",f.name.replace(".json",""));if(n){extension_settings[extensionName].savedWorkflows[n]=j;extension_settings[extensionName].currentWorkflowName=n;saveSettingsDebounced();populateWorkflows();}}catch{toastr.error("Invalid JSON");}$(e.target).val('');}
 function showKazumaProgress(text = "Processing...") {
     $("#kazuma_progress_text").text(text);
@@ -995,41 +1302,74 @@ function showKazumaProgress(text = "Processing...") {
 function hideKazumaProgress() {
     $("#kazuma_progress_overlay").hide();
 }
-/* --- WORKFLOW CONTEXT MANAGERS --- */
-function getWorkflowState() {
+
+/* --- IMAGE PROFILES ---
+ * A profile is one workflow plus everything that has to move with it: the checkpoint, sampler,
+ * scheduler, steps/cfg/denoise/clip, resolution, negative prompt and the LoRA list. Two profiles
+ * can point at the same workflow file with completely different params, which is the point - an
+ * anime character and a realistic one share a node map but nothing else.
+ *
+ * The live settings object stays the source of truth for generation; a profile is a snapshot of it,
+ * refreshed whenever you switch away. Profiles link to characters (by avatar filename), groups and
+ * individual chats, and the linked one is applied automatically on chat change.
+ */
+const PROFILE_STATE_KEYS = [
+    'currentWorkflowName',
+    'selectedModel', 'selectedSampler', 'selectedScheduler',
+    'steps', 'cfg', 'denoise', 'clipSkip',
+    'imgWidth', 'imgHeight', 'customSeed', 'customNegative',
+    'promptStyle', 'promptPerspective', 'promptExtra',
+    'loras',
+];
+
+function captureProfileState() {
     const s = extension_settings[extensionName];
-    // Capture all image-related parameters
-    return {
-        selectedModel: s.selectedModel,
-        selectedSampler: s.selectedSampler,
-        steps: s.steps,
-        cfg: s.cfg,
-        denoise: s.denoise,
-        clipSkip: s.clipSkip,
-        imgWidth: s.imgWidth,
-        imgHeight: s.imgHeight,
-        customSeed: s.customSeed,
-        customNegative: s.customNegative,
-        // Smart Prompts
-        promptStyle: s.promptStyle,
-        promptPerspective: s.promptPerspective,
-        promptExtra: s.promptExtra,
-        // LoRAs
-        selectedLora: s.selectedLora, selectedLoraWt: s.selectedLoraWt,
-        selectedLora2: s.selectedLora2, selectedLoraWt2: s.selectedLoraWt2,
-        selectedLora3: s.selectedLora3, selectedLoraWt3: s.selectedLoraWt3,
-        selectedLora4: s.selectedLora4, selectedLoraWt4: s.selectedLoraWt4,
-    };
+    const state = {};
+    for (const key of PROFILE_STATE_KEYS) state[key] = s[key];
+    state.loras = structuredClone(s.loras || []);
+    return state;
 }
 
-function applyWorkflowState(state) {
+function getActiveProfile() {
     const s = extension_settings[extensionName];
-    // 1. Update Global Settings
-    Object.assign(s, state);
+    return s.profiles?.[s.activeProfileId] || null;
+}
+
+/** Fold live settings back into the profile they came from, so switching away never loses edits. */
+function snapshotActiveProfile() {
+    const profile = getActiveProfile();
+    if (profile) profile.state = captureProfileState();
+}
+
+function switchProfile(id, { silent = false } = {}) {
+    const s = extension_settings[extensionName];
+    const profile = s.profiles?.[id];
+    if (!profile || id === s.activeProfileId) return;
+
+    snapshotActiveProfile();
+    s.activeProfileId = id;
+    applyProfileState(profile.state || {});
+    populateImageProfiles();
+    saveSettingsDebounced();
+    if (!silent) toastr.info(`Image profile: ${profile.name}`, "Image Gen Kazuma");
+}
+
+function applyProfileState(state) {
+    const s = extension_settings[extensionName];
+    // 1. Update Global Settings. A key the profile predates (it was saved before that setting
+    // existed) falls back to the default instead of writing undefined over a working value.
+    for (const key of PROFILE_STATE_KEYS) {
+        const value = state[key];
+        s[key] = value === undefined ? defaultSettings[key] : structuredClone(value);
+    }
+    if (!Array.isArray(s.loras)) s.loras = [];
 
     // 2. Update UI Elements
+    $("#kazuma_workflow_list").val(s.currentWorkflowName);
     $("#kazuma_model_list").val(s.selectedModel);
     $("#kazuma_sampler_list").val(s.selectedSampler);
+    $("#kazuma_scheduler_list").val(s.selectedScheduler);
+    renderLoraQuickList();
 
     updateSliderInput('kazuma_steps', 'kazuma_steps_val', s.steps);
     updateSliderInput('kazuma_cfg', 'kazuma_cfg_val', s.cfg);
@@ -1046,487 +1386,507 @@ function applyWorkflowState(state) {
     $("#kazuma_prompt_persp").val(s.promptPerspective || "scene");
     $("#kazuma_prompt_extra").val(s.promptExtra || "");
 
-    // LoRA UI
-    $("#kazuma_lora_list").val(s.selectedLora);
-    $("#kazuma_lora_list_2").val(s.selectedLora2);
-    $("#kazuma_lora_list_3").val(s.selectedLora3);
-    $("#kazuma_lora_list_4").val(s.selectedLora4);
-
-    // LoRA Weights UI
-    $("#kazuma_lora_wt").val(s.selectedLoraWt); $("#kazuma_lora_wt_display").text(s.selectedLoraWt);
-    $("#kazuma_lora_wt_2").val(s.selectedLoraWt2); $("#kazuma_lora_wt_display_2").text(s.selectedLoraWt2);
-    $("#kazuma_lora_wt_3").val(s.selectedLoraWt3); $("#kazuma_lora_wt_display_3").text(s.selectedLoraWt3);
-    $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
 }
 
+/* --- PROFILE UI --- */
+function populateImageProfiles() {
+    const s = extension_settings[extensionName];
+    const $sel = $("#kazuma_image_profile");
+    if (!$sel.length) return;
 
+    $sel.empty();
+    for (const p of Object.values(s.profiles || {})) {
+        const suffix = p.id === s.defaultProfileId ? " (default)" : "";
+        $sel.append($('<option></option>').val(p.id).text(`${p.name}${suffix}`));
+    }
+    $sel.val(s.activeProfileId);
+    renderProfileLinks();
+}
 
-// --- MOBILE GALLERY FIX & LIGHTBOX ENHANCER ---
-(function() {
-    let sourceImage = null;
-    let enhanceInterval = null;
-    window.kazumaIsGeneratingNew = false;
-    window.kazumaExpectedTotal = 0;
-    window.kazumaFrozenSrc = '';
-    window.kazumaActiveObserver = null;
+/** Linked characters/chats as thumbnails, same idea as the persona connections row. */
+function renderProfileLinks() {
+    const $box = $("#kazuma_profile_links");
+    if (!$box.length) return;
+    const profile = getActiveProfile();
+    $box.empty();
 
-    function getKazumaCounterData($liveMessage, srcImage) {
-        let data = null;
-        if ($liveMessage && $liveMessage.length) {
-            let text = $liveMessage.find('.mes_img_swipe_counter, .swipe_info').text();
-            if (!text) text = $liveMessage.find('.mes_media_container, [class*="gallery"], .mes_text').text();
-            if (!text) text = $liveMessage.find('.mes_buttons, [class*="swipe"]').text();
-            let match = text.match(/(\d+)\s*\/\s*(\d+)/);
-            if (match) data = { current: parseInt(match[1], 10), total: parseInt(match[2], 10) };
-        }
-
-        if (!data && typeof getContext === 'function') {
-            const messageId = $liveMessage ? $liveMessage.attr('mes') : undefined;
-            if (messageId) {
-                const chat = getContext().chat;
-                const msg = chat ? chat[messageId] : null;
-                if (msg) {
-                    if (Array.isArray(msg.swipes) && msg.swipes.length > 1) {
-                        data = { current: (msg.swipe_id || 0) + 1, total: msg.swipes.length };
-                    } else if (msg.extra && Array.isArray(msg.extra.image_links) && msg.extra.image_links.length > 1) {
-                        const total = msg.extra.image_links.length;
-                        let current = 0;
-                        const currentSrc = srcImage ? srcImage.attr('src') : '';
-                        msg.extra.image_links.forEach((link, i) => {
-                            if (currentSrc.includes(link) || link.includes(currentSrc)) current = i;
-                        });
-                        data = { current: current + 1, total };
-                    }
-                }
-            }
-        }
-
-        if (!data && srcImage) {
-            const $container = srcImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-            const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
-            if ($galleryImages.length > 1) {
-                let current = 0;
-                $galleryImages.each(function(i) {
-                    if ($(this).attr('src') === srcImage.attr('src')) current = i;
-                });
-                data = { current: current + 1, total: $galleryImages.length };
-            }
-        }
-        return data;
+    const links = profile?.links || [];
+    if (!links.length) {
+        $box.append($('<small class="opacity50p"></small>').text("Not linked - used only when picked by hand, or as the fallback if it is the default."));
+        return;
     }
 
-    function startPollingForLightbox() {
-        if (enhanceInterval) clearInterval(enhanceInterval);
-        let attempts = 0;
-        
-        enhanceInterval = setInterval(() => {
-            attempts++;
-            if (attempts > 60) { // 3 seconds timeout
-                clearInterval(enhanceInterval);
-                return;
-            }
-            
-            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible, dialog.popup[open], .popup.transparent_dialogue_popup:visible').first();
-            
-            if ($modal.length) {
-                const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
-                if ($modalImg.length && $modalImg.attr('src')) {
-                    clearInterval(enhanceInterval);
-                    enhanceLightbox($modal, $modalImg);
-                }
-            }
-        }, 50);
-    }
-
-    document.addEventListener('click', function(e) {
-        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image, img');
-        if ($img.length && $img.closest('.mes_text, .mes_media_container').length) {
-            if (window.innerWidth <= 1024) {
-                if (window.lastTappedGalleryImage !== $img[0]) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.lastTappedGalleryImage = $img[0];
-                    return false;
-                } else {
-                    window.lastTappedGalleryImage = null;
-                }
-            }
-            // Tap allows lightbox - set source and poll
-            sourceImage = $img;
-            startPollingForLightbox();
-        } else if (window.innerWidth <= 1024) {
-            window.lastTappedGalleryImage = null;
+    const context = getContext();
+    for (const link of links) {
+        const $item = $('<div class="kazuma-link-chip" title="Click to unlink"></div>');
+        if (link.type === 'character') {
+            const char = context.characters?.find(c => c.avatar === link.id);
+            $item.append($('<img>').attr('src', getThumbnailUrl('avatar', link.id)).attr('alt', char?.name || link.id));
+            $item.attr('title', `${char?.name || link.id} - click to unlink`);
+        } else {
+            $item.append($('<i></i>').addClass(link.type === 'chat' ? 'fa-solid fa-comment' : 'fa-solid fa-users'));
+            $item.attr('title', `${link.type}: ${link.id} - click to unlink`);
         }
-    }, true);
-
-    function enhanceLightbox($modal, $modalImg) {
-        if (!sourceImage) return;
-
-        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-        const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
-        const messageId = $message.attr('mes');
-        const messageIndex = $('.mes').index($message);
-
-        // Actively intercept and block SillyTavern from visually reverting the image while generating
-        if (window.kazumaActiveObserver) {
-            window.kazumaActiveObserver.disconnect();
-            window.kazumaActiveObserver = null;
-        }
-        
-        let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-        if (!$liveMessage.length) $liveMessage = sourceImage.closest('.mes');
-
-        window.kazumaActiveObserver = new MutationObserver((mutations) => {
-            let shouldCheck = false;
-            mutations.forEach((mutation) => {
-                if (mutation.type === 'attributes' && mutation.attributeName === 'src') shouldCheck = true;
-                if (mutation.type === 'childList') shouldCheck = true;
-            });
-
-            if (shouldCheck && window.kazumaIsGeneratingNew) {
-                // Dynamically fetch live message to avoid reading a detached background DOM node if ST rerendered it
-                const $liveMsg = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-                const data = getKazumaCounterData($liveMsg.length ? $liveMsg : $liveMessage, sourceImage);
-                const $currentModalImg = $('.img_enlarged, #dialogue_popup img, .mfp-wrap img').not('.kazuma-lightbox-controls img').first();
-
-                if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
-                    // Do nothing here. pollForGenerationComplete will handle dropping the freeze and pushing the new image cleanly!
-                } else {
-                    if ($currentModalImg.length && window.kazumaFrozenSrc && $currentModalImg.attr('src') !== window.kazumaFrozenSrc) {
-                        $currentModalImg.attr('src', window.kazumaFrozenSrc); // Block the flash
-                    }
-                }
-            }
+        $item.on('click', () => {
+            profile.links = profile.links.filter(l => !(l.type === link.type && l.id === link.id));
+            saveSettingsDebounced();
+            renderProfileLinks();
         });
-        window.kazumaActiveObserver.observe(document.body, { attributes: true, attributeFilter: ['src'], childList: true, subtree: true });
-
-        $modal.find('.kazuma-lightbox-controls').remove();
-        
-        // Find Swipe next/prev for mobile touch & floating arrows
-        const $realNext = $message.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
-        const $realPrev = $message.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
-
-        const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-        $clonedControls.css({
-            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            pointerEvents: 'none', zIndex: 2147483647, display: 'block'
-        });
-
-        // 1. Map and Clone the Hover Menu (Refresh, Delete, etc.)
-        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').not('.kazuma-lightbox-controls *').first();
-        if ($controls.length) {
-            let kazumaIdCounter = 0;
-            // Assign unique IDs to originals so we can perfectly map clicks back
-            $controls.find('*').addBack().each(function() {
-                let id = `kzm-${Date.now()}-${kazumaIdCounter++}`;
-                $(this).attr('data-kazuma-id', id);
-            });
-
-            const $clonedHover = $controls.clone(false, false).removeAttr('id');
-            
-            // Strip out the Caption button from the lightbox view as requested
-            $clonedHover.find('.mes_img_caption, [title*="Caption"], [title*="caption"], .fa-envelope-open-text').remove();
-            
-            // Replicate the original Kazuma lightbox control styling exactly
-            $clonedHover.css({
-                position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
-                display: 'flex', justifyContent: 'center', alignItems: 'center', pointerEvents: 'none',
-                opacity: 1, visibility: 'visible', width: '100%', background: 'transparent'
-            });
-            
-            $clonedHover.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
-            
-            // Add extra space specifically between the native Zoom and Delete buttons
-            $clonedHover.children().css({ margin: '0 15px' });
-
-            // Perfect proxy clicks
-            $clonedHover.on('click', '[data-kazuma-id]', function(e) {
-                e.stopPropagation(); e.preventDefault();
-                let id = $(this).attr('data-kazuma-id');
-                $container.find(`[data-kazuma-id="${id}"]`).click();
-                updateModalImg();
-            });
-
-            $clonedHover.on('click', function(e) {
-                e.stopPropagation();
-            });
-            
-            // Expose a reference so we can add the arrows into it below
-            $clonedControls.data('kazumaHover', $clonedHover);
-            $clonedControls.append($clonedHover);
-        }
-
-        // Removed explicit Prompt overlay since SillyTavern natively provides a copyable block
-
-        // 3. Explicit Left/Right Arrows for Lightbox Navigation!
-        const $hoverRef = $clonedControls.data('kazumaHover');
-        const arrowCssInline = {
-            cursor: 'pointer', margin: '0 20px', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontSize: '18px', color: 'var(--smart-text-color, white)'
-        };
-        const arrowCssFloating = {
-            position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-            pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
-            alignItems: 'center', justifyContent: 'center', fontSize: '24px',
-            background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
-            cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
-        };
-
-        // --- Shared Navigation Methods ---
-        function pollForGenerationComplete() {
-            if (!window.kazumaIsGeneratingNew) return;
-            
-            let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$liveMessage.length) $liveMessage = sourceImage.closest('.mes');
-            if (!$liveMessage.length) return;
-
-            const data = getKazumaCounterData($liveMessage, sourceImage);
-            
-            if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
-                window.kazumaIsGeneratingNew = false;
-                
-                const $liveImg = getActiveImage($liveMessage);
-                if ($liveImg && $liveImg.length) {
-                    sourceImage = $liveImg;
-                    updateModalImg(); // Push new image and update counter
-                }
-            } else {
-                setTimeout(pollForGenerationComplete, 500);
-            }
-        }
-
-        function doNext(e) {
-            if (e) { e.stopPropagation(); e.preventDefault(); }
-            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$currentMessage.length) $currentMessage = sourceImage.closest('.mes');
-            if (!$currentMessage.length) return;
-
-            const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .mes_img_swipe_right').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
-            
-            const data = getKazumaCounterData($currentMessage, sourceImage);
-            if (data && data.current === data.total) {
-                window.kazumaIsGeneratingNew = true;
-                window.kazumaExpectedTotal = data.total + 1;
-                window.kazumaFrozenSrc = sourceImage.attr('src');
-                if (typeof toastr !== 'undefined') toastr.info("Generating new image...", "Image Gen Kazuma");
-            }
-
-            if ($currentNext.length && !window.kazumaIsGeneratingNew) { 
-                const oldSrc = sourceImage.attr('src');
-                $currentNext.click(); 
-                pollForSrcChange(oldSrc);
-            } else {
-                // If generating, bypass the native click to prevent ST from wrapping the inline gallery
-                if (messageId !== undefined && typeof getContext === 'function') {
-                    const chat = getContext().chat;
-                    if (chat && chat[messageId]) {
-                        if (!chat[messageId].extra) chat[messageId].extra = {};
-                        if (chat[messageId].extra.media) chat[messageId].extra.media_index = chat[messageId].extra.media.length - 1;
-                        eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'right', element: sourceImage });
-                    }
-                }
-                if (window.kazumaIsGeneratingNew) pollForGenerationComplete();
-            }
-        }
-
-        function doPrev(e) {
-            if (e) { e.stopPropagation(); e.preventDefault(); }
-            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$currentMessage.length) $currentMessage = sourceImage.closest('.mes');
-            if (!$currentMessage.length) return;
-
-            const $currentPrev = $currentMessage.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
-            
-            if ($currentPrev.length) { 
-                const oldSrc = sourceImage.attr('src');
-                $currentPrev.click(); 
-                pollForSrcChange(oldSrc);
-            } else {
-                if (messageId !== undefined && typeof getContext === 'function') {
-                    const chat = getContext().chat;
-                    if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'left', element: sourceImage });
-                }
-            }
-        }
-
-        let $counter = null;
-        if ($hoverRef) {
-            $counter = $('<div class="kazuma-slide-counter"></div>').css({
-                margin: '0 10px', fontSize: '14px', color: 'var(--smart-text-color, white)',
-                display: 'flex', alignItems: 'center', fontWeight: 'bold', fontFamily: 'monospace', opacity: 0.8
-            });
-            $hoverRef.prepend($counter);
-        }
-
-        function updateCounterUI() {
-            if (!$counter) return;
-
-            let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$liveMessage.length) $liveMessage = sourceImage ? sourceImage.closest('.mes') : null;
-
-            const data = getKazumaCounterData($liveMessage, sourceImage);
-            
-            if (data && (!window.kazumaIsGeneratingNew || data.total >= window.kazumaExpectedTotal)) {
-                $counter.text(`${data.current} / ${data.total}`).show();
-            } else if (data && window.kazumaIsGeneratingNew) {
-                // Freeze the counter visually if generating
-                $counter.text(`${window.kazumaExpectedTotal - 1} / ${window.kazumaExpectedTotal - 1}`).show();
-            } else {
-                $counter.hide();
-            }
-        }
-        updateCounterUI();
-
-        if ($realPrev.length) {
-            const $btnPrev = $('<div class="menu_button interactable" title="Previous Image"><i class="fa-solid fa-chevron-left"></i></div>');
-            $btnPrev.on('click', doPrev);
-            if ($hoverRef) $hoverRef.prepend($btnPrev.css(arrowCssInline));
-            else $clonedControls.append($btnPrev.css(arrowCssFloating).css('left', '20px'));
-        }
-
-        if ($realNext.length) {
-            const $btnNext = $('<div class="menu_button interactable" title="Next Image"><i class="fa-solid fa-chevron-right"></i></div>');
-            $btnNext.on('click', doNext);
-            if ($hoverRef) $hoverRef.append($btnNext.css(arrowCssInline));
-            else $clonedControls.append($btnNext.css(arrowCssFloating).css('right', '20px'));
-        }
-
-        const $target = $modal.find('.popup-content, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
-        const $appendTarget = $target.length ? $target : $modal;
-
-        if ($appendTarget.css('position') === 'static') $appendTarget.css('position', 'relative');
-        $appendTarget.append($clonedControls);
-
-        // --- Instant Native CSS Hover Logic ---
-        if (!$('#kazuma-lightbox-css').length) {
-            $('head').append(`
-                <style id="kazuma-lightbox-css">
-                    .kazuma-lightbox-controls { opacity: 0; transition: opacity 0.15s ease-in-out; }
-                    .popup-content:hover .kazuma-lightbox-controls,
-                    .img_enlarged_container:hover .kazuma-lightbox-controls,
-                    .kazuma-lightbox-controls:hover { opacity: 1; }
-                    @media (pointer: coarse) {
-                        .kazuma-lightbox-controls { opacity: 1 !important; }
-                    }
-                </style>
-            `);
-        }
-
-        // Prevent native browser drag-and-drop on the image when we mouse-swipe
-        $modalImg.on('dragstart', function(e) { e.preventDefault(); });
-
-        // --- Universal Swipe/Drag functionality ---
-        let startX = 0, isDragging = false, wasSwiped = false;
-        
-        if (window._kazumaDown) {
-            window.removeEventListener('touchstart', window._kazumaDown, true);
-            window.removeEventListener('mousedown', window._kazumaDown, true);
-            window.removeEventListener('touchend', window._kazumaUp, true);
-            window.removeEventListener('mouseup', window._kazumaUp, true);
-            if (window._kazumaClickBlocker) window.removeEventListener('click', window._kazumaClickBlocker, true);
-        }
-
-        window._kazumaDown = function(e) {
-            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) return;
-            // Ignore swipes that start on text, code blocks, or buttons so we don't break normal interactions
-            if ($(e.target).closest('code, pre, .menu_button, .interactable, .popup-controls').length > 0) return;
-
-            if (e.type === 'touchstart') {
-                startX = e.changedTouches[0].screenX;
-            } else if (e.type === 'mousedown') {
-                startX = e.screenX;
-                isDragging = true;
-            }
-        };
-
-        window._kazumaUp = function(e) {
-            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) {
-                isDragging = false;
-                return;
-            }
-            let endX = 0;
-            if (e.type === 'touchend') {
-                endX = e.changedTouches[0].screenX;
-            } else if (e.type === 'mouseup') {
-                if (!isDragging) return;
-                endX = e.screenX;
-                isDragging = false;
-            } else return;
-
-            const threshold = 40;
-            if (endX < startX - threshold) { // Swipe Left (Next)
-                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
-                doNext(e);
-            } else if (endX > startX + threshold) { // Swipe Right (Prev)
-                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
-                doPrev(e);
-            }
-        };
-
-        window._kazumaClickBlocker = function(e) {
-            if (wasSwiped) { e.stopPropagation(); e.preventDefault(); }
-        };
-
-        window.addEventListener('touchstart', window._kazumaDown, true);
-        window.addEventListener('mousedown', window._kazumaDown, true);
-        window.addEventListener('touchend', window._kazumaUp, true);
-        window.addEventListener('mouseup', window._kazumaUp, true);
-        window.addEventListener('click', window._kazumaClickBlocker, true);
-
-        function getActiveImage($currentMessage) {
-            let $activeImg = null;
-            let minDiff = Infinity;
-            const $container = $currentMessage.find('.mes_media_container, .inline-image-container, .gallery-image').first();
-            if (!$container.length) {
-                return $currentMessage.find('img').not('.kazuma-lightbox-controls img').filter(function() { return $(this).is(':visible') && parseFloat($(this).css('opacity')) !== 0; }).first();
-            }
-            
-            const containerLeft = $container.offset().left;
-            
-            $container.find('img').not('.kazuma-lightbox-controls img').each(function() {
-                if (!$(this).is(':visible') || parseFloat($(this).css('opacity')) === 0) return;
-                const imgLeft = $(this).offset().left;
-                const diff = Math.abs(imgLeft - containerLeft);
-                
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    $activeImg = $(this);
-                }
-            });
-            
-            return $activeImg || $container.find('img').not('.kazuma-lightbox-controls img').filter(function() { return $(this).is(':visible') && parseFloat($(this).css('opacity')) !== 0; }).first();
-        }
-
-        function pollForSrcChange(oldSrc, attempts = 0) {
-            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$currentMessage.length) $currentMessage = sourceImage ? sourceImage.closest('.mes') : null;
-            if (!$currentMessage || !$currentMessage.length) return;
-            
-            const $liveImg = getActiveImage($currentMessage);
-            
-            if ($liveImg && $liveImg.length && $liveImg.attr('src') !== oldSrc) {
-                sourceImage = $liveImg;
-                updateModalImg();
-            } else if (attempts < 20) {
-                setTimeout(() => pollForSrcChange(oldSrc, attempts + 1), 50);
-            }
-        }
-
-        function updateModalImg() {
-            if (sourceImage && sourceImage.length) {
-                const newSrc = sourceImage.attr('src');
-                if (newSrc && $modalImg.attr('src') !== newSrc) {
-                    $modalImg.attr('src', newSrc);
-                    const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-                    const $titleCode = $modal.find('.img_enlarged_title');
-                    if ($titleCode.length && newPrompt) {
-                        const $copyIcon = $titleCode.find('.code-copy').clone();
-                        $titleCode.text(newPrompt);
-                        if ($copyIcon.length) $titleCode.append($copyIcon);
-                    }
-                    if (typeof updateCounterUI === 'function') updateCounterUI();
-                }
-            }
-        }
+        $box.append($item);
     }
-})();
+}
+
+/** What the current chat is, in link terms. */
+function getCurrentLinkTargets() {
+    const context = getContext();
+    return {
+        chatId: getCurrentChatId(),
+        characterAvatar: context.groupId ? null : context.characters?.[context.characterId]?.avatar,
+        groupId: context.groupId || null,
+    };
+}
+
+function onChatChangedForProfiles() {
+    const s = extension_settings[extensionName];
+    if (!s.enabled || !s.autoSwitchProfile) return;
+
+    const match = findProfileForContext(s.profiles, getCurrentLinkTargets());
+    // Nothing linked falls back to the default profile, so leaving a linked character can't leave
+    // you generating with its workflow.
+    switchProfile(match?.id || s.defaultProfileId);
+    renderProfileLinks();
+}
+
+async function openProfileManager() {
+    const s = extension_settings[extensionName];
+    const context = getContext();
+
+    const $content = $(`
+    <div style="display:flex;flex-direction:column;gap:10px;width:100%;text-align:left;">
+        <div style="display:flex;gap:5px;align-items:center;">
+            <select class="text_pole pm-list" style="flex:1;"></select>
+            <div class="menu_button pm-new" title="New profile"><i class="fa-solid fa-plus"></i></div>
+            <div class="menu_button pm-copy" title="Duplicate"><i class="fa-solid fa-clone"></i></div>
+            <div class="menu_button pm-default" title="Use as fallback when nothing is linked"><i class="fa-solid fa-crown"></i></div>
+            <div class="menu_button pm-delete" title="Delete"><i class="fa-solid fa-trash"></i></div>
+        </div>
+        <div>
+            <label><b>Name</b></label>
+            <input type="text" class="text_pole pm-name" style="width:100%;">
+        </div>
+        <div class="pm-summary opacity50p" style="font-size:12px;"></div>
+        <hr style="opacity:0.2;margin:2px 0;">
+        <div><b>Linked to</b></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+            <div class="menu_button pm-link-char"><i class="fa-solid fa-user"></i> Link current character</div>
+            <div class="menu_button pm-link-chat"><i class="fa-solid fa-comment"></i> Link current chat</div>
+        </div>
+        <div class="pm-links" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        <div>
+            <label><b>Link any character</b></label>
+            <div style="display:flex;gap:5px;">
+                <select class="text_pole pm-char-list" style="flex:1;"></select>
+                <div class="menu_button pm-link-picked">Link</div>
+            </div>
+        </div>
+        <small class="opacity50p">A chat link wins over a character link, so one specific chat can override its character's profile. Switching chats applies the linked profile and stores your current tweaks back into the one you are leaving.</small>
+    </div>
+    `);
+
+    // The character picker is one string: a few thousand options built one jQuery node at a time is
+    // the difference between instant and a visible freeze.
+    const charOptions = (context.characters || [])
+        .map((c, i) => `<option value="${i}">${$('<div>').text(c.name).html()}</option>`).join('');
+    $content.find('.pm-char-list').html(charOptions);
+
+    let editingId = s.activeProfileId;
+
+    const refresh = () => {
+        const $list = $content.find('.pm-list').empty();
+        for (const p of Object.values(s.profiles)) {
+            const suffix = p.id === s.defaultProfileId ? " (default)" : "";
+            $list.append($('<option></option>').val(p.id).text(`${p.name}${suffix}`));
+        }
+        $list.val(editingId);
+
+        const profile = s.profiles[editingId];
+        $content.find('.pm-name').val(profile?.name || '');
+        const st = profile?.state || {};
+        $content.find('.pm-summary').text(
+            `Workflow: ${st.currentWorkflowName || '(none)'} - ${(st.loras || []).length} LoRAs - ${st.selectedModel || 'no checkpoint'} - ${st.selectedSampler || '?'}/${st.selectedScheduler || '?'} - ${st.steps ?? '?'} steps, cfg ${st.cfg ?? '?'}`);
+
+        const $links = $content.find('.pm-links').empty();
+        for (const link of profile?.links || []) {
+            const $chip = $('<div class="kazuma-link-chip" title="Click to unlink"></div>');
+            if (link.type === 'character') {
+                const char = context.characters?.find(c => c.avatar === link.id);
+                $chip.append($('<img>').attr('src', getThumbnailUrl('avatar', link.id)));
+                $chip.attr('title', `${char?.name || link.id} - click to unlink`);
+            } else {
+                $chip.append($('<i></i>').addClass(link.type === 'chat' ? 'fa-solid fa-comment' : 'fa-solid fa-users'));
+                $chip.attr('title', `${link.type}: ${link.id} - click to unlink`);
+            }
+            $chip.on('click', () => {
+                profile.links = profile.links.filter(l => !(l.type === link.type && l.id === link.id));
+                saveSettingsDebounced();
+                refresh();
+            });
+            $links.append($chip);
+        }
+    };
+
+    /** One link target belongs to one profile, otherwise which one wins is a coin toss. */
+    const addLink = (type, id) => {
+        if (!id) return toastr.warning(`No ${type} open right now.`);
+        for (const p of Object.values(s.profiles)) {
+            p.links = (p.links || []).filter(l => !(l.type === type && l.id === id));
+        }
+        s.profiles[editingId].links.push({ type, id });
+        saveSettingsDebounced();
+        refresh();
+    };
+
+    $content.find('.pm-list').on('change', function () {
+        // Switch for real so the panel and the popup can't disagree about what is active.
+        switchProfile($(this).val(), { silent: true });
+        editingId = s.activeProfileId;
+        refresh();
+    });
+
+    $content.find('.pm-name').on('input', function () {
+        s.profiles[editingId].name = $(this).val();
+        saveSettingsDebounced();
+        populateImageProfiles();
+    });
+
+    $content.find('.pm-new').on('click', () => {
+        snapshotActiveProfile();
+        const id = newProfileId();
+        s.profiles[id] = { id, name: `Profile ${Object.keys(s.profiles).length + 1}`, links: [], state: captureProfileState() };
+        s.activeProfileId = id;
+        editingId = id;
+        saveSettingsDebounced();
+        populateImageProfiles();
+        refresh();
+    });
+
+    $content.find('.pm-copy').on('click', () => {
+        snapshotActiveProfile();
+        const source = s.profiles[editingId];
+        const id = newProfileId();
+        s.profiles[id] = { id, name: `${source.name} copy`, links: [], state: structuredClone(source.state) };
+        editingId = id;
+        s.activeProfileId = id;
+        saveSettingsDebounced();
+        populateImageProfiles();
+        refresh();
+    });
+
+    $content.find('.pm-default').on('click', () => {
+        s.defaultProfileId = editingId;
+        saveSettingsDebounced();
+        populateImageProfiles();
+        refresh();
+    });
+
+    $content.find('.pm-delete').on('click', () => {
+        if (Object.keys(s.profiles).length <= 1) return toastr.warning("That's the last profile.");
+        delete s.profiles[editingId];
+        if (s.defaultProfileId === editingId) s.defaultProfileId = Object.keys(s.profiles)[0];
+        s.activeProfileId = "";
+        editingId = Object.keys(s.profiles)[0];
+        switchProfile(editingId, { silent: true });
+        saveSettingsDebounced();
+        populateImageProfiles();
+        refresh();
+    });
+
+    $content.find('.pm-link-char').on('click', () => {
+        const { characterAvatar, groupId } = getCurrentLinkTargets();
+        addLink(groupId ? 'group' : 'character', groupId || characterAvatar);
+    });
+    $content.find('.pm-link-chat').on('click', () => addLink('chat', getCurrentLinkTargets().chatId));
+    $content.find('.pm-link-picked').on('click', () => {
+        const char = context.characters?.[parseInt($content.find('.pm-char-list').val())];
+        addLink('character', char?.avatar);
+    });
+
+    // Fold live edits in first, or the summary describes the profile as it was when last switched to.
+    snapshotActiveProfile();
+    refresh();
+    await new Popup($content, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: true, allowVerticalScrolling: true }).show();
+    populateImageProfiles();
+    renderLoraQuickList();
+}
+
+/* --- LORA UI ---
+ * The drawer holds the day-to-day controls (toggle + weight per LoRA); the manager popup holds the
+ * structure (which LoRAs exist, their slider range). Both edit the live list directly - there is no
+ * cancel, same as the persona menu.
+ */
+function shortLoraName(name) {
+    return name ? name.split('/').pop().replace(/\.(safetensors|ckpt|pt)$/i, '') : "(empty slot)";
+}
+
+function renderLoraQuickList() {
+    const $box = $("#kazuma_lora_quick");
+    if (!$box.length) return;
+    const loras = extension_settings[extensionName].loras || [];
+
+    $box.empty();
+    if (!loras.length) {
+        $box.append($('<small class="opacity50p"></small>').text("No LoRAs yet. Manage LoRAs to add some."));
+        return;
+    }
+
+    loras.forEach((lora, i) => {
+        const $row = $(`
+        <div class="kazuma-lora-row">
+            <input type="checkbox" class="kz-on" title="Active">
+            <span class="kazuma-lora-name"></span>
+            <input type="range" class="kz-wt">
+            <input type="number" class="text_pole kz-wt-num" style="width:56px;">
+        </div>`);
+
+        $row.find('.kazuma-lora-name').text(shortLoraName(lora.name)).attr('title', lora.name || '');
+        $row.find('.kz-on').prop('checked', !!lora.enabled);
+        $row.find('.kz-wt, .kz-wt-num').attr({ min: lora.min, max: lora.max, step: LORA_STEP }).val(lora.weight);
+        $row.toggleClass('kazuma-lora-off', !lora.enabled);
+
+        const setWeight = (v) => {
+            lora.weight = clampWeight({ ...lora, weight: v });
+            $row.find('.kz-wt, .kz-wt-num').val(lora.weight);
+            saveSettingsDebounced();
+        };
+        $row.find('.kz-on').on('change', function () {
+            lora.enabled = $(this).prop('checked');
+            $row.toggleClass('kazuma-lora-off', !lora.enabled);
+            saveSettingsDebounced();
+        });
+        $row.find('.kz-wt').on('input', function () { setWeight(parseFloat(this.value)); });
+        $row.find('.kz-wt-num').on('change', function () { setWeight(parseFloat(this.value)); });
+
+        $box.append($row);
+    });
+}
+
+/**
+ * Searchable LoRA picker. A dropdown per row does not survive a real collection - a thousand files
+ * on a hundred rows is a hundred thousand DOM nodes - so the profile list only ever holds the LoRAs
+ * you picked, and this is how you add more.
+ *
+ * Resolves to the chosen filenames, or [] if cancelled.
+ */
+async function pickLoras({ exclude = [], single = false, limit = MAX_LORAS } = {}) {
+    if (!availableLoras.length) await fetchComfyLists();
+    if (!availableLoras.length) {
+        toastr.error("No LoRAs came back from ComfyUI. Check the server URL and hit Test Connection.");
+        return [];
+    }
+
+    const hidden = new Set(exclude);
+    const choices = availableLoras.filter(f => !hidden.has(f));
+    const selected = new Set();
+
+    const $content = $(`
+    <div style="display:flex;flex-direction:column;gap:8px;width:100%;text-align:left;">
+        <input type="search" class="text_pole lp-search" placeholder="Search ${choices.length} LoRAs..." style="width:100%;">
+        <div class="lp-list" style="max-height:55vh;overflow-y:auto;border:1px solid var(--smart-border-color);border-radius:4px;"></div>
+        <div class="lp-status opacity50p" style="font-size:12px;"></div>
+    </div>
+    `);
+
+    const $list = $content.find('.lp-list');
+    const escape = (t) => $('<div>').text(t).html();
+
+    // One innerHTML write per keystroke: a thousand rows built node-by-node is a visible stall.
+    const render = () => {
+        const query = $content.find('.lp-search').val().toLowerCase().trim();
+        const terms = query.split(/\s+/).filter(Boolean);
+        const matches = choices
+            .map((f, i) => [f, i])
+            .filter(([f]) => terms.every(t => f.toLowerCase().includes(t)));
+
+        $list.html(matches.map(([f, i]) => {
+            const folder = f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '';
+            const file = f.split('/').pop();
+            return `<div class="kazuma-pick-row${selected.has(f) ? ' selected' : ''}" data-idx="${i}">
+                ${single ? '' : `<input type="checkbox" ${selected.has(f) ? 'checked' : ''} tabindex="-1">`}
+                <span class="kazuma-pick-name">${escape(file)}</span>
+                <span class="kazuma-pick-folder">${escape(folder)}</span>
+            </div>`;
+        }).join('') || '<div class="opacity50p" style="padding:10px;">Nothing matches.</div>');
+
+        $content.find('.lp-status').text(
+            `${matches.length} shown${hidden.size ? `, ${hidden.size} already in this profile` : ''}`
+            + (single ? '' : ` - ${selected.size} picked`));
+    };
+
+    let resolveSingle = null;
+    const singlePicked = new Promise(resolve => { resolveSingle = resolve; });
+
+    $list.on('click', '.kazuma-pick-row', function () {
+        const file = choices[parseInt(this.dataset.idx, 10)];
+        if (single) return resolveSingle(file);
+
+        if (selected.has(file)) selected.delete(file);
+        else if (selected.size >= limit) return toastr.warning(`${limit} is the cap for this profile.`);
+        else selected.add(file);
+
+        $(this).toggleClass('selected', selected.has(file)).find('input').prop('checked', selected.has(file));
+        $content.find('.lp-status').text(
+            `${$list.children('.kazuma-pick-row').length} shown${hidden.size ? `, ${hidden.size} already in this profile` : ''} - ${selected.size} picked`);
+    });
+
+    $content.find('.lp-search').on('input', render);
+    render();
+
+    const popup = new Popup($content, POPUP_TYPE.CONFIRM, '', {
+        okButton: single ? 'Cancel' : 'Add selected', cancelButton: single ? false : 'Cancel',
+        wide: true, large: true, allowVerticalScrolling: true,
+    });
+
+    if (single) {
+        // Clicking a row is the answer here, so whichever settles first wins.
+        const file = await Promise.race([singlePicked.then(f => (popup.completeCancelled(), f)), popup.show().then(() => null)]);
+        return file ? [file] : [];
+    }
+
+    const confirmed = await popup.show();
+    return confirmed ? [...selected] : [];
+}
+
+async function openLoraManager() {
+    const s = extension_settings[extensionName];
+    if (!availableLoras.length) await fetchComfyLists();
+
+    const $content = $(`
+    <div style="display:flex;flex-direction:column;gap:8px;width:100%;text-align:left;">
+        <div class="lm-profile opacity50p" style="font-size:12px;"></div>
+        <div class="lm-rows" style="display:flex;flex-direction:column;gap:6px;max-height:55vh;overflow-y:auto;"></div>
+        <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+            <div class="menu_button lm-add"><i class="fa-solid fa-plus"></i> Add LoRA</div>
+            <div class="menu_button lm-import" title="Pull the LoRAs hardcoded in this workflow's Power Lora Loader into the list"><i class="fa-solid fa-file-import"></i> Import from workflow</div>
+            <span class="lm-count opacity50p" style="font-size:12px;"></span>
+        </div>
+        <small class="opacity50p">Only the LoRAs you pick live here - <b>Add LoRA</b> opens the full searchable list and takes as many as you tick at once. Min/max set that row's slider range, so a LoRA that only behaves between 0 and 0.4 gets a slider for exactly that. Off sends it at strength 0, which changes nothing in the image, and the row stays so you can flip it back. Click a name to swap it for a different file.</small>
+    </div>
+    `);
+
+    const $rows = $content.find('.lm-rows');
+
+    const refresh = () => {
+        const profile = getActiveProfile();
+        $content.find('.lm-profile').text(`Profile: ${profile?.name || '?'} - workflow: ${s.currentWorkflowName || '(none)'}`);
+        $content.find('.lm-count').text(`${s.loras.length} / ${MAX_LORAS}`);
+        $content.find('.lm-add').toggleClass('disabled', s.loras.length >= MAX_LORAS);
+        $rows.empty();
+
+        s.loras.forEach((lora, i) => {
+            const $row = $(`
+            <div class="kazuma-lora-edit">
+                <input type="checkbox" class="kz-on" title="Active">
+                <span class="kz-name" title="Click to swap this LoRA for another"></span>
+                <label class="kz-lbl">min<input type="number" class="text_pole kz-min" step="0.05" style="width:60px;"></label>
+                <label class="kz-lbl">max<input type="number" class="text_pole kz-max" step="0.05" style="width:60px;"></label>
+                <label class="kz-lbl">wt<input type="number" class="text_pole kz-wt" style="width:60px;"></label>
+                <div class="menu_button kz-up" title="Move up"><i class="fa-solid fa-arrow-up"></i></div>
+                <div class="menu_button kz-del" title="Remove"><i class="fa-solid fa-trash"></i></div>
+            </div>`);
+
+            const missing = lora.name && availableLoras.length && !availableLoras.includes(lora.name);
+            $row.find('.kz-name')
+                .text(shortLoraName(lora.name) + (missing ? " (missing)" : ""))
+                .attr('title', `${lora.name || 'no file picked'} - click to swap`)
+                .toggleClass('kz-missing', !!missing);
+            $row.find('.kz-on').prop('checked', !!lora.enabled);
+            $row.find('.kz-min').val(lora.min);
+            $row.find('.kz-max').val(lora.max);
+            $row.find('.kz-wt').attr({ min: lora.min, max: lora.max, step: LORA_STEP }).val(lora.weight);
+
+            $row.find('.kz-name').on('click', async function () {
+                const [picked] = await pickLoras({ single: true, exclude: s.loras.map(l => l.name).filter(n => n && n !== lora.name) });
+                if (!picked) return;
+                lora.name = picked;
+                lora.enabled = true;
+                saveSettingsDebounced();
+                refresh();
+            });
+            $row.find('.kz-on').on('change', function () { lora.enabled = $(this).prop('checked'); saveSettingsDebounced(); });
+            $row.find('.kz-min').on('change', function () {
+                lora.min = parseFloat(this.value);
+                if (!(lora.min < lora.max)) lora.max = lora.min + 1;
+                lora.weight = clampWeight(lora);
+                saveSettingsDebounced();
+                refresh();
+            });
+            $row.find('.kz-max').on('change', function () {
+                lora.max = parseFloat(this.value);
+                if (!(lora.max > lora.min)) lora.min = lora.max - 1;
+                lora.weight = clampWeight(lora);
+                saveSettingsDebounced();
+                refresh();
+            });
+            $row.find('.kz-wt').on('change', function () {
+                lora.weight = clampWeight({ ...lora, weight: parseFloat(this.value) });
+                saveSettingsDebounced();
+                refresh();
+            });
+            $row.find('.kz-up').toggleClass('disabled', i === 0).on('click', () => {
+                if (i === 0) return;
+                [s.loras[i - 1], s.loras[i]] = [s.loras[i], s.loras[i - 1]];
+                saveSettingsDebounced();
+                refresh();
+            });
+            $row.find('.kz-del').on('click', () => {
+                s.loras.splice(i, 1);
+                saveSettingsDebounced();
+                refresh();
+            });
+
+            $rows.append($row);
+        });
+    };
+
+    $content.find('.lm-add').on('click', async () => {
+        if (s.loras.length >= MAX_LORAS) return toastr.warning(`${MAX_LORAS} is the cap.`);
+        const picked = await pickLoras({
+            exclude: s.loras.map(l => l.name).filter(Boolean),
+            limit: MAX_LORAS - s.loras.length,
+        });
+        if (!picked.length) return;
+        s.loras.push(...picked.map(name => makeLora(name)));
+        saveSettingsDebounced();
+        refresh();
+        $rows.scrollTop($rows[0].scrollHeight);
+    });
+
+    $content.find('.lm-import').on('click', async () => {
+        const imported = await importLorasFromWorkflow();
+        if (!imported.length) return toastr.info("No hardcoded LoRAs found in this workflow's Power Lora Loader.");
+        s.loras.push(...imported.slice(0, MAX_LORAS - s.loras.length));
+        saveSettingsDebounced();
+        refresh();
+        toastr.success(`Imported ${imported.length} LoRAs. They are managed here now - the workflow JSON no longer decides.`);
+    });
+
+    refresh();
+    await new Popup($content, POPUP_TYPE.TEXT, '', { okButton: 'Close', wide: true, large: true, allowVerticalScrolling: true }).show();
+    renderLoraQuickList();
+}
+
+/** Read the active workflow off the server and lift its hand-written Power Lora Loader slots. */
+async function importLorasFromWorkflow() {
+    const name = extension_settings[extensionName].currentWorkflowName;
+    if (!name) return [];
+    try {
+        const res = await fetch('/api/sd/comfy/workflow', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ file_name: name }) });
+        if (!res.ok) throw new Error(await res.text());
+        const raw = await res.json();
+        const workflow = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+        return Object.values(workflow).flatMap(node => importLorasFromPowerNode(node));
+    } catch (e) {
+        toastr.error(`Could not read ${name}: ${e.message}`);
+        return [];
+    }
+}
