@@ -1018,11 +1018,11 @@ function applyWorkflowState(state) {
                 return;
             }
             
-            // Check for ST standard modals and Fancybox
-            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
+            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible, dialog.popup[open], .popup.transparent_dialogue_popup:visible').first();
+            
             if ($modal.length) {
                 const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
-                if ($modalImg.length) {
+                if ($modalImg.length && $modalImg.attr('src')) {
                     clearInterval(enhanceInterval);
                     enhanceLightbox($modal, $modalImg);
                 }
@@ -1142,7 +1142,7 @@ function applyWorkflowState(state) {
             $clonedControls.append($btnNext);
         }
 
-        const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+        const $target = $modal.find('.popup-content, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
         if ($target.length) {
             if ($target.css('position') === 'static') $target.css('position', 'relative');
             $target.append($clonedControls);
