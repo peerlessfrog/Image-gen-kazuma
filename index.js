@@ -961,3 +961,330 @@ function applyWorkflowState(state) {
     $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
 }
 
+// --- MOBILE GALLERY FIX ---
+let lastTappedGalleryImage = null;
+$(document).on("click", "img", function(e) {
+    if (window.innerWidth <= 1024) {
+        // Target gallery images
+        if ($(this).closest(".mes_media_container, .gallery-image").length || $(this).hasClass("img_media")) {
+            if (lastTappedGalleryImage !== this) {
+                // First tap: prevent lightbox, allow hover UI to show
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                lastTappedGalleryImage = this;
+                return false;
+            } else {
+                // Second tap: allow click to pass through
+                lastTappedGalleryImage = null;
+        $("#kazuma_debug").on("change", (e) => { extension_settings[extensionName].debugPrompt = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_url").on("input", (e) => { extension_settings[extensionName].comfyUrl = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_profile").on("change", (e) => { extension_settings[extensionName].connectionProfile = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_auto_enable").on("change", (e) => { extension_settings[extensionName].autoGenEnabled = $(e.target).prop("checked"); saveSettingsDebounced(); });
+        $("#kazuma_auto_freq").on("input", (e) => { let v = parseInt($(e.target).val()); if(v<1)v=1; extension_settings[extensionName].autoGenFreq = v; saveSettingsDebounced(); });
+
+        // SMART WORKFLOW SWITCHER
+        $("#kazuma_workflow_list").on("change", (e) => {
+            const newWorkflow = $(e.target).val();
+            const oldWorkflow = extension_settings[extensionName].currentWorkflowName;
+
+            // 1. Snapshot OLD workflow settings
+            if (oldWorkflow) {
+                if (!extension_settings[extensionName].savedWorkflowStates) extension_settings[extensionName].savedWorkflowStates = {};
+                extension_settings[extensionName].savedWorkflowStates[oldWorkflow] = getWorkflowState();
+                console.log(`[${extensionName}] Saved context for ${oldWorkflow}`);
+            }
+
+            // 2. Load NEW workflow settings (if they exist)
+            if (extension_settings[extensionName].savedWorkflowStates && extension_settings[extensionName].savedWorkflowStates[newWorkflow]) {
+                applyWorkflowState(extension_settings[extensionName].savedWorkflowStates[newWorkflow]);
+                toastr.success(`Restored settings for ${newWorkflow}`);
+            } else {
+                // If no saved state, we keep current values (Inheritance) - smoother UX
+                toastr.info(`New workflow context active`);
+            }
+
+            // 3. Update Pointer
+            extension_settings[extensionName].currentWorkflowName = newWorkflow;
+            saveSettingsDebounced();
+        });
+        $("#kazuma_import_btn").on("click", () => $("#kazuma_import_file").click());
+
+        // New Logic Events
+        $("#kazuma_prompt_style").on("change", (e) => { extension_settings[extensionName].promptStyle = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_prompt_persp").on("change", (e) => { extension_settings[extensionName].promptPerspective = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_prompt_extra").on("input", (e) => { extension_settings[extensionName].promptExtra = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_profile_strategy").on("change", (e) => {
+            extension_settings[extensionName].profileStrategy = $(e.target).val();
+            toggleProfileVisibility();
+            saveSettingsDebounced();
+        });
+
+        $("#kazuma_new_workflow").on("click", onComfyNewWorkflowClick);
+        $("#kazuma_edit_workflow").on("click", onComfyOpenWorkflowEditorClick);
+        $("#kazuma_delete_workflow").on("click", onComfyDeleteWorkflowClick);
+
+        $("#kazuma_model_list").on("change", (e) => { extension_settings[extensionName].selectedModel = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_sampler_list").on("change", (e) => { extension_settings[extensionName].selectedSampler = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_resolution_list").on("change", (e) => {
+            const idx = parseInt($(e.target).val());
+            if (!isNaN(idx) && RESOLUTIONS[idx]) {
+                const r = RESOLUTIONS[idx];
+                $("#kazuma_width").val(r.w).trigger("input");
+                $("#kazuma_height").val(r.h).trigger("input");
+            }
+        });
+
+        $("#kazuma_lora_list").on("change", (e) => { extension_settings[extensionName].selectedLora = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_lora_list_2").on("change", (e) => { extension_settings[extensionName].selectedLora2 = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_lora_list_3").on("change", (e) => { extension_settings[extensionName].selectedLora3 = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_lora_list_4").on("change", (e) => { extension_settings[extensionName].selectedLora4 = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_lora_wt").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt = v; $("#kazuma_lora_wt_display").text(v); saveSettingsDebounced(); });
+        $("#kazuma_lora_wt_2").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt2 = v; $("#kazuma_lora_wt_display_2").text(v); saveSettingsDebounced(); });
+        $("#kazuma_lora_wt_3").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt3 = v; $("#kazuma_lora_wt_display_3").text(v); saveSettingsDebounced(); });
+        $("#kazuma_lora_wt_4").on("input", (e) => { let v = parseFloat($(e.target).val()); extension_settings[extensionName].selectedLoraWt4 = v; $("#kazuma_lora_wt_display_4").text(v); saveSettingsDebounced(); });
+
+        $("#kazuma_width, #kazuma_height").on("input", (e) => { extension_settings[extensionName][e.target.id === "kazuma_width" ? "imgWidth" : "imgHeight"] = parseInt($(e.target).val()); saveSettingsDebounced(); });
+        $("#kazuma_negative").on("input", (e) => { extension_settings[extensionName].customNegative = $(e.target).val(); saveSettingsDebounced(); });
+        $("#kazuma_seed").on("input", (e) => { extension_settings[extensionName].customSeed = parseInt($(e.target).val()); saveSettingsDebounced(); });
+        $("#kazuma_compress").on("change", (e) => { extension_settings[extensionName].compressImages = $(e.target).prop("checked"); saveSettingsDebounced(); });
+
+        function bindSlider(id, key, isFloat = false) {
+            $(`#${id}`).on("input", function() {
+                let v = isFloat ? parseFloat(this.value) : parseInt(this.value);
+                extension_settings[extensionName][key] = v;
+                $(`#${id}_val`).val(v);
+                saveSettingsDebounced();
+            });
+            $(`#${id}_val`).on("input", function() {
+                let v = isFloat ? parseFloat(this.value) : parseInt(this.value);
+                extension_settings[extensionName][key] = v;
+                $(`#${id}`).val(v);
+                saveSettingsDebounced();
+            });
+        }
+        bindSlider("kazuma_steps", "steps", false);
+        bindSlider("kazuma_cfg", "cfg", true);
+        bindSlider("kazuma_denoise", "denoise", true);
+        bindSlider("kazuma_clip", "clipSkip", false);
+
+        $("#kazuma_test_btn").on("click", onTestConnection);
+        $("#kazuma_gen_prompt_btn").on("click", onGeneratePrompt);
+
+        loadSettings();
+        eventSource.on(event_types.MESSAGE_RECEIVED, onMessageReceived);
+        eventSource.on(event_types.IMAGE_SWIPED, onImageSwiped);
+
+        let att = 0; const int = setInterval(() => { if ($("#kazuma_quick_gen").length > 0) { clearInterval(int); return; } createChatButton(); att++; if (att > 5) clearInterval(int); }, 1000);
+        $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); onGeneratePrompt(); });
+    } catch (e) { console.error(e); }
+});
+
+// Helpers (Condensed)
+function onMessageReceived(id) { if (!extension_settings[extensionName].enabled || !extension_settings[extensionName].autoGenEnabled) return; const chat = getContext().chat; if (!chat || !chat.length) return; if (chat[chat.length - 1].is_user || chat[chat.length - 1].is_system) return; const aiMsgCount = chat.filter(m => !m.is_user && !m.is_system).length; const freq = parseInt(extension_settings[extensionName].autoGenFreq) || 1; if (aiMsgCount % freq === 0) { console.log(`[${extensionName}] Auto-gen...`); setTimeout(onGeneratePrompt, 500); } }
+function createChatButton() { if ($("#kazuma_quick_gen").length > 0) return; const b = `<div id="kazuma_quick_gen" class="interactable" title="Visualize" style="cursor: pointer; width: 35px; height: 35px; display: flex; align-items: center; justify-content: center; margin-right: 5px; opacity: 0.7;"><i class="fa-solid fa-paintbrush fa-lg"></i></div>`; let t = $("#send_but_sheld"); if (!t.length) t = $("#send_textarea"); if (t.length) { t.attr("id") === "send_textarea" ? t.before(b) : t.prepend(b); } }
+function populateProfiles() { const s=$("#kazuma_profile"),o=$("#settings_preset_openai").find("option");s.empty().append('<option value="">-- Use Current Settings --</option>');if(o.length)o.each(function(){s.append(`<option value="${$(this).val()}">${$(this).text()}</option>`)});if(extension_settings[extensionName].connectionProfile)s.val(extension_settings[extensionName].connectionProfile);}
+async function onFileSelected(e) { const f=e.target.files[0];if(!f)return;const t=await f.text();try{const j=JSON.parse(t),n=prompt("Name:",f.name.replace(".json",""));if(n){extension_settings[extensionName].savedWorkflows[n]=j;extension_settings[extensionName].currentWorkflowName=n;saveSettingsDebounced();populateWorkflows();}}catch{toastr.error("Invalid JSON");}$(e.target).val('');}
+function showKazumaProgress(text = "Processing...") {
+    $("#kazuma_progress_text").text(text);
+    $("#kazuma_progress_overlay").css("display", "flex");
+}
+
+function hideKazumaProgress() {
+    $("#kazuma_progress_overlay").hide();
+}
+/* --- WORKFLOW CONTEXT MANAGERS --- */
+function getWorkflowState() {
+    const s = extension_settings[extensionName];
+    // Capture all image-related parameters
+    return {
+        selectedModel: s.selectedModel,
+        selectedSampler: s.selectedSampler,
+        steps: s.steps,
+        cfg: s.cfg,
+        denoise: s.denoise,
+        clipSkip: s.clipSkip,
+        imgWidth: s.imgWidth,
+        imgHeight: s.imgHeight,
+        customSeed: s.customSeed,
+        customNegative: s.customNegative,
+        // Smart Prompts
+        promptStyle: s.promptStyle,
+        promptPerspective: s.promptPerspective,
+        promptExtra: s.promptExtra,
+        // LoRAs
+        selectedLora: s.selectedLora, selectedLoraWt: s.selectedLoraWt,
+        selectedLora2: s.selectedLora2, selectedLoraWt2: s.selectedLoraWt2,
+        selectedLora3: s.selectedLora3, selectedLoraWt3: s.selectedLoraWt3,
+        selectedLora4: s.selectedLora4, selectedLoraWt4: s.selectedLoraWt4,
+    };
+}
+
+function applyWorkflowState(state) {
+    const s = extension_settings[extensionName];
+    // 1. Update Global Settings
+    Object.assign(s, state);
+
+    // 2. Update UI Elements
+    $("#kazuma_model_list").val(s.selectedModel);
+    $("#kazuma_sampler_list").val(s.selectedSampler);
+
+    updateSliderInput('kazuma_steps', 'kazuma_steps_val', s.steps);
+    updateSliderInput('kazuma_cfg', 'kazuma_cfg_val', s.cfg);
+    updateSliderInput('kazuma_denoise', 'kazuma_denoise_val', s.denoise);
+    updateSliderInput('kazuma_clip', 'kazuma_clip_val', s.clipSkip);
+
+    $("#kazuma_width").val(s.imgWidth);
+    $("#kazuma_height").val(s.imgHeight);
+    $("#kazuma_seed").val(s.customSeed);
+    $("#kazuma_negative").val(s.customNegative);
+
+    // Smart Prompt UI
+    $("#kazuma_prompt_style").val(s.promptStyle || "standard");
+    $("#kazuma_prompt_persp").val(s.promptPerspective || "scene");
+    $("#kazuma_prompt_extra").val(s.promptExtra || "");
+
+    // LoRA UI
+    $("#kazuma_lora_list").val(s.selectedLora);
+    $("#kazuma_lora_list_2").val(s.selectedLora2);
+    $("#kazuma_lora_list_3").val(s.selectedLora3);
+    $("#kazuma_lora_list_4").val(s.selectedLora4);
+
+    // LoRA Weights UI
+    $("#kazuma_lora_wt").val(s.selectedLoraWt); $("#kazuma_lora_wt_display").text(s.selectedLoraWt);
+    $("#kazuma_lora_wt_2").val(s.selectedLoraWt2); $("#kazuma_lora_wt_display_2").text(s.selectedLoraWt2);
+    $("#kazuma_lora_wt_3").val(s.selectedLoraWt3); $("#kazuma_lora_wt_display_3").text(s.selectedLoraWt3);
+    $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
+}
+
+// --- MOBILE GALLERY FIX ---
+let lastTappedGalleryImage = null;
+$(document).on("click", "img", function(e) {
+    if (window.innerWidth <= 1024) {
+        // Target gallery images
+        if ($(this).closest(".mes_media_container, .gallery-image").length || $(this).hasClass("img_media")) {
+            if (lastTappedGalleryImage !== this) {
+                // First tap: prevent lightbox, allow hover UI to show
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                lastTappedGalleryImage = this;
+                return false;
+            } else {
+                // Second tap: allow click to pass through
+                lastTappedGalleryImage = null;
+            }
+        }
+    }
+});
+
+$(document).on("click", function(e) {
+    if (!$(e.target).is("img")) {
+        lastTappedGalleryImage = null;
+    }
+});
+
+// --- LIGHTBOX SWIPE & CONTROLS ENHANCER ---
+(function() {
+    let sourceImage = null;
+    
+    // Track the last clicked inline gallery image
+    $(document).on('click', 'img', function() {
+        if ($(this).closest('.mes_text').length) {
+            sourceImage = $(this);
+        }
+    });
+
+    // Observe body for modal additions
+    const observer = new MutationObserver((mutations) => {
+        for (const mut of mutations) {
+            for (const node of mut.addedNodes) {
+                if (node.nodeType === 1) {
+                    const $el = $(node);
+                    // Check if it looks like a fullscreen modal/lightbox
+                    if ($el.css('position') === 'fixed' || parseInt($el.css('z-index')) >= 1000 || $el.attr('id') === 'dialogue_popup' || $el.hasClass('mfp-wrap')) {
+                        const $modalImg = $el.find('img').first();
+                        if ($modalImg.length && sourceImage && $modalImg.attr('src') === sourceImage.attr('src')) {
+                            enhanceLightbox($el, $modalImg);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
+    if (document.body) {
+        observer.observe(document.body, { childList: true, subtree: true });
+    } else {
+        $(document).ready(() => observer.observe(document.body, { childList: true, subtree: true }));
+    }
+
+    function enhanceLightbox($modal, $modalImg) {
+        // Prevent multiple enhancements
+        if ($modal.find('.kazuma-lightbox-controls').length) return;
+
+        // Find controls from source
+        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
+        
+        if ($controls.length) {
+            const $clonedControls = $controls.clone(true, true);
+            $clonedControls.addClass('kazuma-lightbox-controls');
+            // Force visibility and styling for lightbox
+            $clonedControls.css({
+                position: 'absolute',
+                bottom: '40px',
+                left: '0',
+                right: '0',
+                display: 'flex',
+                justifyContent: 'center',
+                zIndex: 999999,
+                pointerEvents: 'auto',
+                opacity: 1,
+                visibility: 'visible'
+            });
+            
+            // Ensure child elements like icons are visible
+            $clonedControls.find('*').css({
+                opacity: 1,
+                visibility: 'visible'
+            });
+
+            // Update modal image if a control is clicked (like prev/next/regenerate)
+            $clonedControls.on('click', '*', function() {
+                updateModalImg();
+            });
+
+            $modal.append($clonedControls);
+        }
+
+        // Swipe functionality
+        let touchStartX = 0;
+        let touchEndX = 0;
+        $modal.on('touchstart', function(e) {
+            if (e.originalEvent && e.originalEvent.changedTouches) {
+                touchStartX = e.originalEvent.changedTouches[0].screenX;
+            }
+        });
+        $modal.on('touchend', function(e) {
+            if (e.originalEvent && e.originalEvent.changedTouches) {
+                touchEndX = e.originalEvent.changedTouches[0].screenX;
+                const threshold = 50;
+                if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
+                    const $next = $container.find('.right_menu_button, .right_arrow, .fa-chevron-right').closest('div, button, i');
+                    if ($next.length) { $next.click(); updateModalImg(); }
+                }
+                if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    const $prev = $container.find('.left_menu_button, .left_arrow, .fa-chevron-left').closest('div, button, i');
+                    if ($prev.length) { $prev.click(); updateModalImg(); }
+                }
+            }
+        });
+
+        function updateModalImg() {
+            setTimeout(() => {
+                if (sourceImage && sourceImage.length) {
+                    $modalImg.attr('src', sourceImage.attr('src'));
+                }
+            }, 100);
+        }
+    }
+})();
