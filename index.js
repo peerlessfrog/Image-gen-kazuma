@@ -754,7 +754,16 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
             
             // Capture the live message ID before ST potentially tears down the DOM node
             let mesId = null;
-            if (target.element) {
+            if (typeof getContext === "function") {
+                const chat = getContext().chat;
+                if (chat) {
+                    const idx = chat.indexOf(target.message);
+                    if (idx !== -1) mesId = idx;
+                }
+            }
+            if (mesId === null && target.message && target.message._id !== undefined) mesId = target.message._id;
+            
+            if (mesId === null && target.element) {
                 const $targetElement = $(target.element);
                 const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
                 if ($mes.length) mesId = $mes.attr('mes');
@@ -763,7 +772,7 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             
             // Force inline visual sync to bypass ST DOM diffing laziness (Loop to beat async redraws & animation clones)
-            if (mesId) {
+            if (mesId !== null) {
                 let syncAttempts = 0;
                 const syncLoop = setInterval(() => {
                     syncAttempts++;
@@ -772,11 +781,14 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
                         $liveMes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img').each(function() {
                             if ($(this).attr('src') !== mediaAttachment.url) {
                                 $(this).attr('src', mediaAttachment.url);
+                                console.log("[Image Gen Kazuma] Force synced inline image to new generated URL");
                             }
                         });
                     }
                     if (syncAttempts >= 20) clearInterval(syncLoop);
                 }, 100);
+            } else {
+                toastr.warning("Could not locate message ID! Visual sync aborted.", "Image Gen Kazuma");
             }
 
             await saveChat();
