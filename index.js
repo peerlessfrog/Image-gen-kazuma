@@ -1006,6 +1006,55 @@ function applyWorkflowState(state) {
 (function() {
     let sourceImage = null;
     let enhanceInterval = null;
+    window.kazumaIsGeneratingNew = false;
+    window.kazumaExpectedTotal = 0;
+    window.kazumaFrozenSrc = '';
+    window.kazumaActiveObserver = null;
+
+    function getKazumaCounterData($liveMessage, srcImage) {
+        let data = null;
+        if ($liveMessage && $liveMessage.length) {
+            let text = $liveMessage.find('.mes_img_swipe_counter, .swipe_info').text();
+            if (!text) text = $liveMessage.find('.mes_media_container, [class*="gallery"], .mes_text').text();
+            if (!text) text = $liveMessage.find('.mes_buttons, [class*="swipe"]').text();
+            let match = text.match(/(\d+)\s*\/\s*(\d+)/);
+            if (match) data = { current: parseInt(match[1], 10), total: parseInt(match[2], 10) };
+        }
+
+        if (!data && typeof getContext === 'function') {
+            const messageId = $liveMessage ? $liveMessage.attr('mes') : undefined;
+            if (messageId) {
+                const chat = getContext().chat;
+                const msg = chat ? chat[messageId] : null;
+                if (msg) {
+                    if (Array.isArray(msg.swipes) && msg.swipes.length > 1) {
+                        data = { current: (msg.swipe_id || 0) + 1, total: msg.swipes.length };
+                    } else if (msg.extra && Array.isArray(msg.extra.image_links) && msg.extra.image_links.length > 1) {
+                        const total = msg.extra.image_links.length;
+                        let current = 0;
+                        const currentSrc = srcImage ? srcImage.attr('src') : '';
+                        msg.extra.image_links.forEach((link, i) => {
+                            if (currentSrc.includes(link) || link.includes(currentSrc)) current = i;
+                        });
+                        data = { current: current + 1, total };
+                    }
+                }
+            }
+        }
+
+        if (!data && srcImage) {
+            const $container = srcImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+            const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
+            if ($galleryImages.length > 1) {
+                let current = 0;
+                $galleryImages.each(function(i) {
+                    if ($(this).attr('src') === srcImage.attr('src')) current = i;
+                });
+                data = { current: current + 1, total: $galleryImages.length };
+            }
+        }
+        return data;
+    }
 
     function startPollingForLightbox() {
         if (enhanceInterval) clearInterval(enhanceInterval);
@@ -1053,12 +1102,44 @@ function applyWorkflowState(state) {
 
     function enhanceLightbox($modal, $modalImg) {
         if (!sourceImage) return;
-        $modal.find('.kazuma-lightbox-controls').remove();
 
         const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
         const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
         const messageId = $message.attr('mes');
         const messageIndex = $('.mes').index($message);
+
+        // Actively intercept and block SillyTavern from visually reverting the image while generating
+        if (window.kazumaActiveObserver) {
+            window.kazumaActiveObserver.disconnect();
+            window.kazumaActiveObserver = null;
+        }
+        
+        let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+        if (!$liveMessage.length) $liveMessage = sourceImage.closest('.mes');
+
+        window.kazumaActiveObserver = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
+                    if (window.kazumaIsGeneratingNew) {
+                        const data = getKazumaCounterData($liveMessage, sourceImage);
+                        if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
+                            window.kazumaIsGeneratingNew = false;
+                            const newSrc = $modalImg.attr('src');
+                            if (newSrc) {
+                                sourceImage.attr('src', newSrc); // Sync back
+                            }
+                        } else {
+                            if (window.kazumaFrozenSrc && $modalImg.attr('src') !== window.kazumaFrozenSrc) {
+                                $modalImg.attr('src', window.kazumaFrozenSrc); // Block the flash
+                            }
+                        }
+                    }
+                }
+            });
+        });
+        window.kazumaActiveObserver.observe($modalImg[0], { attributes: true, attributeFilter: ['src'] });
+
+        $modal.find('.kazuma-lightbox-controls').remove();
         
         // Find Swipe next/prev for mobile touch & floating arrows
         const $realNext = $message.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
@@ -1139,20 +1220,18 @@ function applyWorkflowState(state) {
 
             const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .mes_img_swipe_right').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
             
-            let isGeneratingNew = false;
-            if ($counter) {
-                const counterText = $counter.text().trim();
-                const match = counterText.match(/(\d+)\s*\/\s*(\d+)/);
-                if (match && match[1] === match[2]) {
-                    isGeneratingNew = true;
-                    if (typeof toastr !== 'undefined') toastr.info("Generating new image...", "Image Gen Kazuma");
-                }
+            const data = getKazumaCounterData($currentMessage, sourceImage);
+            if (data && data.current === data.total) {
+                window.kazumaIsGeneratingNew = true;
+                window.kazumaExpectedTotal = data.total + 1;
+                window.kazumaFrozenSrc = sourceImage.attr('src');
+                if (typeof toastr !== 'undefined') toastr.info("Generating new image...", "Image Gen Kazuma");
             }
 
             if ($currentNext.length) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentNext.click(); 
-                if (!isGeneratingNew) pollForSrcChange(oldSrc);
+                if (!window.kazumaIsGeneratingNew) pollForSrcChange(oldSrc);
             } else {
                 if (messageId !== undefined && typeof getContext === 'function') {
                     const chat = getContext().chat;
@@ -1193,55 +1272,16 @@ function applyWorkflowState(state) {
         function updateCounterUI() {
             if (!$counter) return;
 
-            let counterText = '';
             let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
             if (!$liveMessage.length) $liveMessage = sourceImage ? sourceImage.closest('.mes') : null;
 
-            // 1. Aggressive regex scraper for #/# pattern in the UI
-            // Targets the exact native .mes_img_swipe_counter class, then falls back to sweeping the entire media container
-            if ($liveMessage && $liveMessage.length) {
-                let text = $liveMessage.find('.mes_img_swipe_counter, .swipe_info').text();
-                if (!text) text = $liveMessage.find('.mes_media_container, [class*="gallery"], .mes_text').text();
-                if (!text) text = $liveMessage.find('.mes_buttons, [class*="swipe"]').text();
-                
-                let match = text.match(/(\d+)\s*\/\s*(\d+)/);
-                if (match) counterText = `${match[1]} / ${match[2]}`;
-            }
-
-            // 2. Try reading ST's internal chat state for msg.swipes or image_links arrays
-            if (!counterText && messageId !== undefined && typeof getContext === 'function') {
-                const chat = getContext().chat;
-                const msg = chat ? chat[messageId] : null;
-                if (msg) {
-                    if (Array.isArray(msg.swipes) && msg.swipes.length > 1) {
-                        counterText = `${(msg.swipe_id || 0) + 1} / ${msg.swipes.length}`;
-                    } else if (msg.extra && Array.isArray(msg.extra.image_links) && msg.extra.image_links.length > 1) {
-                        const total = msg.extra.image_links.length;
-                        let current = 0;
-                        const currentSrc = sourceImage.attr('src');
-                        msg.extra.image_links.forEach((link, i) => {
-                            if (currentSrc.includes(link) || link.includes(currentSrc)) current = i;
-                        });
-                        counterText = `${current + 1} / ${total}`;
-                    }
-                }
-            }
-
-            // 3. Fallback to raw DOM inline gallery size tracking
-            if (!counterText) {
-                const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
-                const totalSlides = $galleryImages.length;
-                if (totalSlides > 1) {
-                    let currentIndex = 0;
-                    $galleryImages.each(function(i) {
-                        if ($(this).attr('src') === sourceImage.attr('src')) currentIndex = i;
-                    });
-                    counterText = `${currentIndex + 1} / ${totalSlides}`;
-                }
-            }
-
-            if (counterText) {
-                $counter.text(counterText).show();
+            const data = getKazumaCounterData($liveMessage, sourceImage);
+            
+            if (data && (!window.kazumaIsGeneratingNew || data.total >= window.kazumaExpectedTotal)) {
+                $counter.text(`${data.current} / ${data.total}`).show();
+            } else if (data && window.kazumaIsGeneratingNew) {
+                // Freeze the counter visually if generating
+                $counter.text(`${window.kazumaExpectedTotal - 1} / ${window.kazumaExpectedTotal - 1}`).show();
             } else {
                 $counter.hide();
             }
