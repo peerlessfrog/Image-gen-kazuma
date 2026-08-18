@@ -1055,8 +1055,10 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $wrapper = sourceImage.parent();
-        const $sourceElements = $wrapper.children().not('img, picture, video');
+        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$wrapper.length) $wrapper = sourceImage.parent();
+        
+        const $sourceElements = $wrapper.children().not('img, picture, video, a');
         
         if ($sourceElements.length) {
             const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
@@ -1123,7 +1125,8 @@ function applyWorkflowState(state) {
             if (e.changedTouches) {
                 touchEndX = e.changedTouches[0].screenX;
                 const threshold = 40;
-                const $wrapper = sourceImage.parent();
+                let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+                if (!$wrapper.length) $wrapper = sourceImage.parent();
                 
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
                     const $next = $wrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
