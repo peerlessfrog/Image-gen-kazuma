@@ -1058,19 +1058,15 @@ function applyWorkflowState(state) {
         const $message = sourceImage.closest('.mes_text');
         let $mediaContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
         if (!$mediaContainer.length) $mediaContainer = sourceImage.parent();
-        let $controlsWrapper = $mediaContainer.parent();
 
-        // Safely locate the next and prev buttons
-        let $prev = $controlsWrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
-        let $next = $controlsWrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
-        
-        // Fallback to searching the whole message if not found in immediate parent
-        if (!$prev.length) $prev = $message.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
-        if (!$next.length) $next = $message.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
+        // Grab ALL potential controls: siblings of the container (inline gallery arrows) and children (hover menus)
+        let $siblingControls = $mediaContainer.siblings().not('br, hr, p, span, .mes_text');
+        let $innerControls = $mediaContainer.children().not('img, picture, video, a, source');
+        let $sourceElements = $siblingControls.add($innerControls).not('.kazuma-lightbox-controls');
 
         const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-        
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+        
         $clonedControls.css({
             position: 'absolute',
             top: 0, left: 0, right: 0, bottom: 0,
@@ -1079,64 +1075,36 @@ function applyWorkflowState(state) {
             display: 'block'
         });
 
-        // Create explicit floating PREV button
-        if ($prev.length) {
-            const $clonedPrev = $prev.clone(false, false).removeAttr('id').css({
-                position: 'absolute',
-                left: '20px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                pointerEvents: 'auto',
-                opacity: 1,
-                visibility: 'visible',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '24px',
-                background: 'rgba(0,0,0,0.6)',
-                padding: '15px',
-                borderRadius: '50%',
-                cursor: 'pointer',
-                color: 'white',
-                border: '2px solid rgba(255,255,255,0.2)'
-            });
-            $clonedPrev.on('click', function(e) {
+        // Proxy Array for Swipe Logic
+        let proxiedPrev = null;
+        let proxiedNext = null;
+
+        // Clone each control and map its click to the original element
+        $sourceElements.each(function() {
+            let $orig = $(this);
+            let $clone = $orig.clone(false, false).removeAttr('id'); // don't copy events or IDs
+            
+            // Check if this is likely a prev/next button for swipe logic
+            const htmlStr = $orig[0].outerHTML.toLowerCase();
+            if (htmlStr.includes('left') || htmlStr.includes('prev')) proxiedPrev = $orig;
+            if (htmlStr.includes('right') || htmlStr.includes('next')) proxiedNext = $orig;
+
+            $clone.on('click', function(e) {
                 e.stopPropagation();
-                $prev.click(); // trigger original
+                e.preventDefault();
+                $orig.click(); // Trigger native click on the original hidden element
                 updateModalImg();
             });
-            $clonedControls.append($clonedPrev);
-        }
 
-        // Create explicit floating NEXT button
-        if ($next.length) {
-            const $clonedNext = $next.clone(false, false).removeAttr('id').css({
-                position: 'absolute',
-                right: '20px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                pointerEvents: 'auto',
-                opacity: 1,
-                visibility: 'visible',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '24px',
-                background: 'rgba(0,0,0,0.6)',
-                padding: '15px',
-                borderRadius: '50%',
-                cursor: 'pointer',
-                color: 'white',
-                border: '2px solid rgba(255,255,255,0.2)'
-            });
-            $clonedNext.on('click', function(e) {
-                e.stopPropagation();
-                $next.click(); // trigger original
-                updateModalImg();
-            });
-            $clonedControls.append($clonedNext);
-        }
+            // Force visibility
+            $clone.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+            $clone.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+            if ($clone.css('display') === 'none') $clone.css('display', 'flex');
 
+            $clonedControls.append($clone);
+        });
+
+        // Add the prompt overlay
         if (promptText) {
             const $promptOverlay = $('<div></div>').css({
                 position: 'absolute',
@@ -1187,16 +1155,16 @@ function applyWorkflowState(state) {
                 const threshold = 40;
                 
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    if ($next.length) { 
+                    if (proxiedNext) { 
                         e.preventDefault(); e.stopPropagation();
-                        $next.click(); 
+                        proxiedNext.click(); 
                         updateModalImg(); 
                     }
                 }
                 else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    if ($prev.length) { 
+                    if (proxiedPrev) { 
                         e.preventDefault(); e.stopPropagation();
-                        $prev.click(); 
+                        proxiedPrev.click(); 
                         updateModalImg(); 
                     }
                 }
