@@ -1055,7 +1055,11 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $message = sourceImage.closest('.mes_text, .message');
+        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        
+        // Find Swipe next/prev for mobile touch & floating arrows
+        const $realNext = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, a, span, i').first();
+        const $realPrev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, a, span, i').first();
 
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
         $clonedControls.css({
@@ -1063,13 +1067,57 @@ function applyWorkflowState(state) {
             pointerEvents: 'none', zIndex: 2147483647, display: 'block'
         });
 
-        // 1. Explicit Prev/Next Navigation for Inner-Side Slides
-        const nextSelectors = '.right_menu_button, .right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]';
-        const prevSelectors = '.left_menu_button, .left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]';
-        
-        const $realNext = $message.find(nextSelectors).not('.kazuma-lightbox-controls *').closest('button, div, a, span').first();
-        const $realPrev = $message.find(prevSelectors).not('.kazuma-lightbox-controls *').closest('button, div, a, span').first();
+        // 1. Map and Clone the Hover Menu (Refresh, Delete, etc.)
+        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').not('.kazuma-lightbox-controls *').first();
+        if ($controls.length) {
+            let kazumaIdCounter = 0;
+            // Assign unique IDs to originals so we can perfectly map clicks back
+            $controls.find('*').addBack().each(function() {
+                let id = `kzm-${Date.now()}-${kazumaIdCounter++}`;
+                $(this).attr('data-kazuma-id', id);
+            });
 
+            const $clonedHover = $controls.clone(false, false).removeAttr('id');
+            
+            // Replicate the original Kazuma lightbox control styling exactly
+            $clonedHover.css({
+                position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
+                display: 'flex', justifyContent: 'center', pointerEvents: 'auto',
+                opacity: 1, visibility: 'visible', width: '100%', background: 'transparent'
+            });
+            
+            $clonedHover.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+
+            // Perfect proxy clicks
+            $clonedHover.on('click', '[data-kazuma-id]', function(e) {
+                e.stopPropagation(); e.preventDefault();
+                let id = $(this).attr('data-kazuma-id');
+                $container.find(`[data-kazuma-id="${id}"]`).click();
+                updateModalImg();
+            });
+
+            $clonedHover.on('click', function(e) {
+                e.stopPropagation();
+            });
+            
+            $clonedControls.append($clonedHover);
+        }
+
+        // 2. Add Prompt explicitly if hover menu doesn't show it well
+        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
+        if (promptText) {
+            if (!$controls.length || !$controls.text().includes(promptText)) {
+                const $promptOverlay = $('<div></div>').css({
+                    position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
+                    background: 'rgba(0,0,0,0.7)', color: 'white', padding: '10px 15px', borderRadius: '8px',
+                    maxWidth: '80%', textAlign: 'center', fontSize: '14px', pointerEvents: 'auto',
+                    fontFamily: 'sans-serif'
+                }).text(promptText);
+                $clonedControls.append($promptOverlay);
+            }
+        }
+
+        // 3. Explicit Left/Right Arrows for Lightbox Navigation!
         if ($realPrev.length) {
             const $btnPrev = $('<div><i class="fa-solid fa-chevron-left"></i></div>').css({
                 position: 'absolute', left: '20px', top: '50%', transform: 'translateY(-50%)',
@@ -1094,52 +1142,6 @@ function applyWorkflowState(state) {
             $clonedControls.append($btnNext);
         }
 
-        // 2. Map and Clone Extra Controls (Refresh, Delete, etc.)
-        const $extraControls = $message.find('.hover-menu, .media-controls, .image-controls').not('.kazuma-lightbox-controls, .kazuma-lightbox-controls *');
-        
-        if ($extraControls.length) {
-            let kazumaIdCounter = 0;
-            // Assign unique IDs to originals so we can perfectly map clicks back
-            $extraControls.find('*').addBack().each(function() {
-                let id = `kzm-${Date.now()}-${kazumaIdCounter++}`;
-                $(this).attr('data-kazuma-id', id);
-            });
-
-            $extraControls.each(function() {
-                let $clone = $(this).clone(false, false).removeAttr('id');
-                
-                $clone.css({
-                    position: 'absolute', top: '20px', right: '80px', 
-                    pointerEvents: 'auto', opacity: 1, visibility: 'visible',
-                    display: 'flex', background: 'rgba(0,0,0,0.5)', borderRadius: '8px', padding: '5px'
-                });
-                
-                $clone.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
-                if ($clone.css('display') === 'none') $clone.css('display', 'flex');
-
-                $clone.on('click', '[data-kazuma-id]', function(e) {
-                    e.stopPropagation(); e.preventDefault();
-                    let id = $(this).attr('data-kazuma-id');
-                    $message.find(`[data-kazuma-id="${id}"]`).click();
-                    updateModalImg();
-                });
-                
-                $clonedControls.append($clone);
-            });
-        }
-
-        // 3. Prompt Overlay
-        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-        if (promptText) {
-            const $promptOverlay = $('<div></div>').css({
-                position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
-                background: 'rgba(0,0,0,0.7)', color: 'white', padding: '10px 15px', borderRadius: '8px',
-                maxWidth: '80%', textAlign: 'center', fontSize: '14px', pointerEvents: 'auto',
-                fontFamily: 'sans-serif'
-            }).text(promptText);
-            $clonedControls.append($promptOverlay);
-        }
-
         const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
         if ($target.length) {
             if ($target.css('position') === 'static') $target.css('position', 'relative');
@@ -1149,7 +1151,7 @@ function applyWorkflowState(state) {
             $modal.append($clonedControls);
         }
 
-        // 4. Swipe Functionality (Top-Level Native Capturing)
+        // --- Swipe functionality (Top-Level Native Capturing) ---
         let touchStartX = 0, touchEndX = 0;
         if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
         if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
@@ -1184,7 +1186,7 @@ function applyWorkflowState(state) {
                         $modalImg.attr('src', newSrc);
                         if ($currentImg.length) sourceImage = $currentImg;
                         const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-                        if (newPrompt) $clonedControls.find('div').last().text(newPrompt);
+                        if (newPrompt) $modal.find('.kazuma-lightbox-controls').find('div').last().text(newPrompt);
                     }
                 }
             }, 100);
