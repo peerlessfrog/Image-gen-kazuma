@@ -465,9 +465,15 @@ async function onGeneratePrompt() {
     showKazumaProgress("Generating Prompt...");
 
     try {
-        toastr.info("Visualizing...", "Image Gen Kazuma");
-        const lastMessage = context.chat[context.chat.length - 1].mes;
-        let sceneText = lastMessage;
+        let sceneText = context.chat[context.chat.length - 1].mes;
+        if (!sceneText || sceneText.trim() === '') {
+            for (let i = context.chat.length - 1; i >= 0; i--) {
+                if (context.chat[i].mes && context.chat[i].mes.trim() !== '') {
+                    sceneText = context.chat[i].mes;
+                    break;
+                }
+            }
+        }
 
         const s = extension_settings[extensionName];
 
