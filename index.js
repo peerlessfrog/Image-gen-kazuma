@@ -1130,12 +1130,13 @@ function applyWorkflowState(state) {
                 // Dynamically fetch live message to avoid reading a detached background DOM node if ST rerendered it
                 const $liveMsg = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
                 const data = getKazumaCounterData($liveMsg.length ? $liveMsg : $liveMessage, sourceImage);
-                const $currentModalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
+                const $currentModalImg = $('.img_enlarged, #dialogue_popup img, .mfp-wrap img').not('.kazuma-lightbox-controls img').first();
 
                 if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
                     window.kazumaIsGeneratingNew = false;
                     if ($currentModalImg.length && $currentModalImg.attr('src')) {
                         sourceImage.attr('src', $currentModalImg.attr('src')); // Sync back to background
+                        if (typeof updateCounterUI === 'function') updateCounterUI(); // Force counter update!
                     }
                 } else {
                     if ($currentModalImg.length && window.kazumaFrozenSrc && $currentModalImg.attr('src') !== window.kazumaFrozenSrc) {
@@ -1144,7 +1145,7 @@ function applyWorkflowState(state) {
                 }
             }
         });
-        window.kazumaActiveObserver.observe($modal[0], { attributes: true, attributeFilter: ['src'], childList: true, subtree: true });
+        window.kazumaActiveObserver.observe(document.body, { attributes: true, attributeFilter: ['src'], childList: true, subtree: true });
 
         $modal.find('.kazuma-lightbox-controls').remove();
         
@@ -1219,6 +1220,28 @@ function applyWorkflowState(state) {
         };
 
         // --- Shared Navigation Methods ---
+        function pollForGenerationComplete() {
+            if (!window.kazumaIsGeneratingNew) return;
+            
+            let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+            if (!$liveMessage.length) $liveMessage = sourceImage.closest('.mes');
+            if (!$liveMessage.length) return;
+
+            const data = getKazumaCounterData($liveMessage, sourceImage);
+            
+            if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
+                window.kazumaIsGeneratingNew = false;
+                
+                const $liveImg = getActiveImage($liveMessage);
+                if ($liveImg && $liveImg.length) {
+                    sourceImage = $liveImg;
+                    updateModalImg(); // Push new image and update counter
+                }
+            } else {
+                setTimeout(pollForGenerationComplete, 500);
+            }
+        }
+
         function doNext(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
             let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
@@ -1238,7 +1261,11 @@ function applyWorkflowState(state) {
             if ($currentNext.length) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentNext.click(); 
-                if (!window.kazumaIsGeneratingNew) pollForSrcChange(oldSrc);
+                if (!window.kazumaIsGeneratingNew) {
+                    pollForSrcChange(oldSrc);
+                } else {
+                    pollForGenerationComplete();
+                }
             } else {
                 if (messageId !== undefined && typeof getContext === 'function') {
                     const chat = getContext().chat;
