@@ -1125,7 +1125,8 @@ function applyWorkflowState(state) {
         // --- Shared Navigation Methods ---
         function doNext(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
-            if ($realNext.length) { $realNext.click(); updateModalImg(); }
+            const $currentNext = $message.find('.fa-chevron-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+            if ($currentNext.length) { $currentNext.click(); updateModalImg(); }
             const id = $message.attr('mes');
             if (id !== undefined && typeof getContext === 'function') {
                 const chat = getContext().chat;
@@ -1134,7 +1135,8 @@ function applyWorkflowState(state) {
         }
         function doPrev(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
-            if ($realPrev.length) { $realPrev.click(); updateModalImg(); }
+            const $currentPrev = $message.find('.fa-chevron-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+            if ($currentPrev.length) { $currentPrev.click(); updateModalImg(); }
             const id = $message.attr('mes');
             if (id !== undefined && typeof getContext === 'function') {
                 const chat = getContext().chat;
@@ -1241,7 +1243,10 @@ function applyWorkflowState(state) {
         function updateModalImg() {
             setTimeout(() => {
                 if (sourceImage && sourceImage.length) {
-                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img:visible').not('.kazuma-lightbox-controls img').first();
+                    let $container = $message.find('img').filter(function() { return $(this).attr('src') === sourceImage.attr('src'); }).closest('.mes_media_container, .inline-image-container');
+                    if (!$container.length) $container = $message.find('.mes_media_container, .inline-image-container').first();
+                    const $currentImg = $container.find('img:visible').not('.kazuma-lightbox-controls img').first();
+                    
                     const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
