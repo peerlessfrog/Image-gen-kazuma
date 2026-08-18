@@ -1056,15 +1056,17 @@ function applyWorkflowState(state) {
         $modal.find('.kazuma-lightbox-controls').remove();
 
         const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
         
         // Find Swipe next/prev for mobile touch & floating arrows
-        const $realNext = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, a, span, i').first();
-        const $realPrev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, a, span, i').first();
+        const $realNext = $message.find('.right_menu_button, .right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *').closest('div, button, a, span, i').first();
+        const $realPrev = $message.find('.left_menu_button, .left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *').closest('div, button, a, span, i').first();
 
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
         $clonedControls.css({
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            pointerEvents: 'none', zIndex: 2147483647, display: 'block'
+            pointerEvents: 'none', zIndex: 2147483647, display: 'block',
+            opacity: 0, transition: 'opacity 0.2s ease-in-out'
         });
 
         // 1. Map and Clone the Hover Menu (Refresh, Delete, etc.)
@@ -1100,82 +1102,124 @@ function applyWorkflowState(state) {
                 e.stopPropagation();
             });
             
+            // Expose a reference so we can add the arrows into it below
+            $clonedControls.data('kazumaHover', $clonedHover);
             $clonedControls.append($clonedHover);
         }
 
-        // 2. Add Prompt explicitly if hover menu doesn't show it well
-        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-        if (promptText) {
-            if (!$controls.length || !$controls.text().includes(promptText)) {
-                const $promptOverlay = $('<div></div>').css({
-                    position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
-                    background: 'rgba(0,0,0,0.7)', color: 'white', padding: '10px 15px', borderRadius: '8px',
-                    maxWidth: '80%', textAlign: 'center', fontSize: '14px', pointerEvents: 'auto',
-                    fontFamily: 'sans-serif'
-                }).text(promptText);
-                $clonedControls.append($promptOverlay);
-            }
-        }
+        // Removed explicit Prompt overlay since SillyTavern natively provides a copyable block
 
         // 3. Explicit Left/Right Arrows for Lightbox Navigation!
+        const $hoverRef = $clonedControls.data('kazumaHover');
+        const arrowCssInline = {
+            cursor: 'pointer', margin: '0 5px', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', fontSize: '18px', color: 'var(--smart-text-color, white)'
+        };
+        const arrowCssFloating = {
+            position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+            pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+            background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
+            cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
+        };
+
+        // --- Shared Navigation Methods ---
+        function doNext(e) {
+            if (e) { e.stopPropagation(); e.preventDefault(); }
+            if ($realNext.length) { $realNext.click(); updateModalImg(); }
+        }
+        function doPrev(e) {
+            if (e) { e.stopPropagation(); e.preventDefault(); }
+            if ($realPrev.length) { $realPrev.click(); updateModalImg(); }
+        }
+
         if ($realPrev.length) {
-            const $btnPrev = $('<div><i class="fa-solid fa-chevron-left"></i></div>').css({
-                position: 'absolute', left: '20px', top: '50%', transform: 'translateY(-50%)',
-                pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', fontSize: '24px',
-                background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
-                cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
-            });
-            $btnPrev.on('click', function(e) { e.stopPropagation(); e.preventDefault(); $realPrev.click(); updateModalImg(); });
-            $clonedControls.append($btnPrev);
+            const $btnPrev = $('<div class="menu_button interactable" title="Previous Image"><i class="fa-solid fa-chevron-left"></i></div>');
+            $btnPrev.on('click', doPrev);
+            if ($hoverRef) $hoverRef.prepend($btnPrev.css(arrowCssInline));
+            else $clonedControls.append($btnPrev.css(arrowCssFloating).css('left', '20px'));
         }
 
         if ($realNext.length) {
-            const $btnNext = $('<div><i class="fa-solid fa-chevron-right"></i></div>').css({
-                position: 'absolute', right: '20px', top: '50%', transform: 'translateY(-50%)',
-                pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', fontSize: '24px',
-                background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
-                cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
-            });
-            $btnNext.on('click', function(e) { e.stopPropagation(); e.preventDefault(); $realNext.click(); updateModalImg(); });
-            $clonedControls.append($btnNext);
+            const $btnNext = $('<div class="menu_button interactable" title="Next Image"><i class="fa-solid fa-chevron-right"></i></div>');
+            $btnNext.on('click', doNext);
+            if ($hoverRef) $hoverRef.append($btnNext.css(arrowCssInline));
+            else $clonedControls.append($btnNext.css(arrowCssFloating).css('right', '20px'));
         }
 
         const $target = $modal.find('.popup-content, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
-        if ($target.length) {
-            if ($target.css('position') === 'static') $target.css('position', 'relative');
-            $target.append($clonedControls);
+        const $appendTarget = $target.length ? $target : $modal;
+
+        if ($appendTarget.css('position') === 'static') $appendTarget.css('position', 'relative');
+        $appendTarget.append($clonedControls);
+
+        // --- Hover Visibility Logic ---
+        if (window.matchMedia("(pointer: coarse)").matches) {
+            // Touch devices: keep controls permanently visible
+            $clonedControls.css('opacity', 1);
         } else {
-            if ($modal.css('position') === 'static') $modal.css('position', 'relative');
-            $modal.append($clonedControls);
+            // Desktop: Start hidden, reveal on hover
+            const $promptText = $modal.find('.img_enlarged_title').parent();
+            $promptText.css({ opacity: 0, transition: 'opacity 0.2s ease-in-out' });
+            
+            $appendTarget.off('mouseenter.kazuma').on('mouseenter.kazuma', function() {
+                $clonedControls.css('opacity', 1);
+                $modal.find('.img_enlarged_title').parent().css('opacity', 1);
+            }).off('mouseleave.kazuma').on('mouseleave.kazuma', function() {
+                $clonedControls.css('opacity', 0);
+                $modal.find('.img_enlarged_title').parent().css('opacity', 0);
+            });
         }
 
-        // --- Swipe functionality (Top-Level Native Capturing) ---
-        let touchStartX = 0, touchEndX = 0;
-        if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
-        if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
+        // --- Universal Swipe/Drag functionality ---
+        let startX = 0, isDragging = false;
+        
+        if (window._kazumaDown) {
+            window.removeEventListener('touchstart', window._kazumaDown, true);
+            window.removeEventListener('mousedown', window._kazumaDown, true);
+            window.removeEventListener('touchend', window._kazumaUp, true);
+            window.removeEventListener('mouseup', window._kazumaUp, true);
+        }
 
-        window._kazumaTouchStart = function(e) {
-            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            if (e.changedTouches) touchStartX = e.changedTouches[0].screenX;
-        };
+        window._kazumaDown = function(e) {
+            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) return;
+            // Ignore swipes that start on text, code blocks, or buttons so we don't break normal interactions
+            if ($(e.target).closest('code, pre, .menu_button, .interactable, .popup-controls').length > 0) return;
 
-        window._kazumaTouchEnd = function(e) {
-            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            if (e.changedTouches) {
-                touchEndX = e.changedTouches[0].screenX;
-                const threshold = 40;
-                if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    if ($realNext.length) { e.preventDefault(); e.stopPropagation(); $realNext.click(); updateModalImg(); }
-                } else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    if ($realPrev.length) { e.preventDefault(); e.stopPropagation(); $realPrev.click(); updateModalImg(); }
-                }
+            if (e.type === 'touchstart') {
+                startX = e.changedTouches[0].screenX;
+            } else if (e.type === 'mousedown') {
+                startX = e.screenX;
+                isDragging = true;
             }
         };
 
-        window.addEventListener('touchstart', window._kazumaTouchStart, true);
-        window.addEventListener('touchend', window._kazumaTouchEnd, true);
+        window._kazumaUp = function(e) {
+            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) {
+                isDragging = false;
+                return;
+            }
+            let endX = 0;
+            if (e.type === 'touchend') {
+                endX = e.changedTouches[0].screenX;
+            } else if (e.type === 'mouseup') {
+                if (!isDragging) return;
+                endX = e.screenX;
+                isDragging = false;
+            } else return;
+
+            const threshold = 40;
+            if (endX < startX - threshold) { // Swipe Left (Next)
+                doNext(e);
+            } else if (endX > startX + threshold) { // Swipe Right (Prev)
+                doPrev(e);
+            }
+        };
+
+        window.addEventListener('touchstart', window._kazumaDown, true);
+        window.addEventListener('mousedown', window._kazumaDown, true);
+        window.addEventListener('touchend', window._kazumaUp, true);
+        window.addEventListener('mouseup', window._kazumaUp, true);
 
         function updateModalImg() {
             setTimeout(() => {
@@ -1186,7 +1230,12 @@ function applyWorkflowState(state) {
                         $modalImg.attr('src', newSrc);
                         if ($currentImg.length) sourceImage = $currentImg;
                         const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-                        if (newPrompt) $modal.find('.kazuma-lightbox-controls').find('div').last().text(newPrompt);
+                        const $titleCode = $modal.find('.img_enlarged_title');
+                        if ($titleCode.length && newPrompt) {
+                            const $copyIcon = $titleCode.find('.code-copy').clone();
+                            $titleCode.text(newPrompt);
+                            if ($copyIcon.length) $titleCode.append($copyIcon);
+                        }
                     }
                 }
             }, 100);
