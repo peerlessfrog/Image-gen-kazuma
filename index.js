@@ -1128,22 +1128,52 @@ function applyWorkflowState(state) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
             const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : sourceImage.closest('.mes');
             const $currentNext = $currentMessage.find('.fa-chevron-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
-            if ($currentNext.length) { $currentNext.click(); updateModalImg(); }
             
-            if (messageId !== undefined && typeof getContext === 'function') {
-                const chat = getContext().chat;
-                if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'right', element: sourceImage });
+            let $allImgs = $currentMessage.find('.mes_media_container img, .inline-image-container img, .gallery-image img').not('.kazuma-lightbox-controls img');
+            
+            if ($currentNext.length) { 
+                $currentNext.click(); 
+            }
+            
+            let idx = -1;
+            $allImgs.each(function(i) {
+                if ($(this).attr('src') === sourceImage.attr('src')) idx = i;
+            });
+            
+            if (idx !== -1 && idx < $allImgs.length - 1) {
+                sourceImage = $allImgs.eq(idx + 1);
+                updateModalImg();
+            } else {
+                if (messageId !== undefined && typeof getContext === 'function') {
+                    const chat = getContext().chat;
+                    if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'right', element: sourceImage });
+                }
             }
         }
         function doPrev(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
             const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : sourceImage.closest('.mes');
             const $currentPrev = $currentMessage.find('.fa-chevron-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
-            if ($currentPrev.length) { $currentPrev.click(); updateModalImg(); }
             
-            if (messageId !== undefined && typeof getContext === 'function') {
-                const chat = getContext().chat;
-                if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'left', element: sourceImage });
+            let $allImgs = $currentMessage.find('.mes_media_container img, .inline-image-container img, .gallery-image img').not('.kazuma-lightbox-controls img');
+            
+            if ($currentPrev.length) { 
+                $currentPrev.click(); 
+            }
+            
+            let idx = -1;
+            $allImgs.each(function(i) {
+                if ($(this).attr('src') === sourceImage.attr('src')) idx = i;
+            });
+            
+            if (idx > 0) {
+                sourceImage = $allImgs.eq(idx - 1);
+                updateModalImg();
+            } else {
+                if (messageId !== undefined && typeof getContext === 'function') {
+                    const chat = getContext().chat;
+                    if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'left', element: sourceImage });
+                }
             }
         }
 
@@ -1244,29 +1274,19 @@ function applyWorkflowState(state) {
         window.addEventListener('click', window._kazumaClickBlocker, true);
 
         function updateModalImg() {
-            setTimeout(() => {
-                const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : (sourceImage ? sourceImage.closest('.mes') : null);
-                if (!$currentMessage || !$currentMessage.length) return;
-
-                if (sourceImage && sourceImage.length) {
-                    let $container = $currentMessage.find('img').filter(function() { return $(this).attr('src') === sourceImage.attr('src'); }).closest('.mes_media_container, .inline-image-container');
-                    if (!$container.length) $container = $currentMessage.find('.mes_media_container, .inline-image-container').first();
-                    const $currentImg = $container.find('img:visible').not('.kazuma-lightbox-controls img').first();
-                    
-                    const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
-                    if (newSrc && $modalImg.attr('src') !== newSrc) {
-                        $modalImg.attr('src', newSrc);
-                        if ($currentImg.length) sourceImage = $currentImg;
-                        const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-                        const $titleCode = $modal.find('.img_enlarged_title');
-                        if ($titleCode.length && newPrompt) {
-                            const $copyIcon = $titleCode.find('.code-copy').clone();
-                            $titleCode.text(newPrompt);
-                            if ($copyIcon.length) $titleCode.append($copyIcon);
-                        }
+            if (sourceImage && sourceImage.length) {
+                const newSrc = sourceImage.attr('src');
+                if (newSrc && $modalImg.attr('src') !== newSrc) {
+                    $modalImg.attr('src', newSrc);
+                    const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
+                    const $titleCode = $modal.find('.img_enlarged_title');
+                    if ($titleCode.length && newPrompt) {
+                        const $copyIcon = $titleCode.find('.code-copy').clone();
+                        $titleCode.text(newPrompt);
+                        if ($copyIcon.length) $titleCode.append($copyIcon);
                     }
                 }
-            }, 100);
+            }
         }
     }
 })();
