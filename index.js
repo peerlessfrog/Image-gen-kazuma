@@ -467,9 +467,8 @@ async function onGeneratePrompt() {
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
         const lastMessage = context.chat[context.chat.length - 1].mes;
-        let sceneText = lastMessage;
-
-        // --- SUMMARYCEPTION INTEGRATION ---
+        // --- CHRONOLOGICAL TIMELINE INTEGRATION ---
+        let summaryText = "";
         if (context.chatMetadata && context.chatMetadata['summaryception'] && context.chatMetadata['summaryception'].layers) {
             const layers = context.chatMetadata['summaryception'].layers;
             const parts = [];
@@ -480,10 +479,26 @@ async function onGeneratePrompt() {
                     if (sn.text) parts.push(sn.text);
                 }
             }
-            if (parts.length > 0) {
-                sceneText = "Prior Context: " + parts.join(' ') + "\\n\\nCurrent Scene: " + lastMessage;
+            if (parts.length > 0) summaryText = parts.join('\\n');
+        }
+
+        let recentChat = "";
+        const chatLen = context.chat.length;
+        const trailCount = Math.min(chatLen - 1, 5); // Grab up to 5 trailing messages
+        const startIndex = chatLen - 1 - trailCount;
+        
+        for (let i = startIndex; i < chatLen - 1; i++) {
+            const msg = context.chat[i];
+            if (!msg.is_system) {
+                const name = msg.name || (msg.is_user ? "User" : "Character");
+                recentChat += `${name}: ${msg.mes}\\n\\n`;
             }
         }
+        
+        let chronologicalContext = "";
+        if (summaryText) chronologicalContext += `[PRIOR CONTEXT SUMMARY]\\n${summaryText}\\n\\n`;
+        if (recentChat) chronologicalContext += `[RECENT CONVERSATION]\\n${recentChat}`;
+        chronologicalContext += `[CURRENT SCENE]\\n${lastMessage}`;
         // ----------------------------------
         const s = extension_settings[extensionName];
 
@@ -501,8 +516,10 @@ async function onGeneratePrompt() {
         else perspInst = "Describe the entire environment and atmosphere.";
 
         const instruction = `
-            Task: Write an image generation prompt for the following scene.
-            Scene: "${sceneText}"
+            Task: Write an image generation prompt for the [CURRENT SCENE] based on the chronological context provided.
+            
+            ${chronologicalContext}
+            
             Style Constraint: ${styleInst}
             Perspective: ${perspInst}
             Additional Req: ${extra}
