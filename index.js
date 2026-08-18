@@ -1082,6 +1082,9 @@ function applyWorkflowState(state) {
 
             const $clonedHover = $controls.clone(false, false).removeAttr('id');
             
+            // Strip out the Caption button from the lightbox view as requested
+            $clonedHover.find('.mes_img_caption, [title*="Caption"], [title*="caption"], .fa-envelope-open-text').remove();
+            
             // Replicate the original Kazuma lightbox control styling exactly
             $clonedHover.css({
                 position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
@@ -1113,7 +1116,7 @@ function applyWorkflowState(state) {
         // 3. Explicit Left/Right Arrows for Lightbox Navigation!
         const $hoverRef = $clonedControls.data('kazumaHover');
         const arrowCssInline = {
-            cursor: 'pointer', margin: '0 5px', display: 'flex', alignItems: 'center',
+            cursor: 'pointer', margin: '0 20px', display: 'flex', alignItems: 'center',
             justifyContent: 'center', fontSize: '18px', color: 'var(--smart-text-color, white)'
         };
         const arrowCssFloating = {
@@ -1164,6 +1167,32 @@ function applyWorkflowState(state) {
                 }
             }
         }
+
+        let $counter = null;
+        if ($hoverRef) {
+            $counter = $('<div class="kazuma-slide-counter"></div>').css({
+                margin: '0 10px', fontSize: '14px', color: 'var(--smart-text-color, white)',
+                display: 'flex', alignItems: 'center', fontWeight: 'bold', fontFamily: 'monospace', opacity: 0.8
+            });
+            $hoverRef.prepend($counter);
+        }
+
+        function updateCounterUI() {
+            if (!$counter) return;
+            const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
+            const totalSlides = $galleryImages.length;
+            if (totalSlides > 1) {
+                let currentIndex = 0;
+                $galleryImages.each(function(i) {
+                    if ($(this).attr('src') === sourceImage.attr('src')) currentIndex = i;
+                });
+                $counter.text(`${currentIndex + 1} / ${totalSlides}`);
+                $counter.show();
+            } else {
+                $counter.hide();
+            }
+        }
+        updateCounterUI();
 
         if ($realPrev.length) {
             const $btnPrev = $('<div class="menu_button interactable" title="Previous Image"><i class="fa-solid fa-chevron-left"></i></div>');
@@ -1312,6 +1341,7 @@ function applyWorkflowState(state) {
                         $titleCode.text(newPrompt);
                         if ($copyIcon.length) $titleCode.append($copyIcon);
                     }
+                    if (typeof updateCounterUI === 'function') updateCounterUI();
                 }
             }
         }
