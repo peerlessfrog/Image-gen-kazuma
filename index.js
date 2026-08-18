@@ -651,11 +651,10 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
      // [UPDATE TEXT]
      showKazumaProgress("Rendering Image...");
 
-     const checkInterval = setInterval(async () => {
+     const check = async () => {
         try {
             const h = await (await fetch(`${baseUrl}/history/${promptId}`)).json();
             if (h[promptId]) {
-                clearInterval(checkInterval);
                 const outputs = h[promptId].outputs;
                 let finalImage = null;
                 for (const nodeId in outputs) {
@@ -677,9 +676,12 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
                 } else {
                     hideKazumaProgress();
                 }
+                return; // Stop checking
             }
         } catch (e) { }
-    }, 1000);
+        setTimeout(check, 1000);
+    };
+    check();
 }
 
 function blobToBase64(blob) { return new Promise((resolve) => { const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob); }); }
@@ -1118,26 +1120,31 @@ function applyWorkflowState(state) {
         if (!$liveMessage.length) $liveMessage = sourceImage.closest('.mes');
 
         window.kazumaActiveObserver = new MutationObserver((mutations) => {
+            let shouldCheck = false;
             mutations.forEach((mutation) => {
-                if (mutation.type === 'attributes' && mutation.attributeName === 'src') {
-                    if (window.kazumaIsGeneratingNew) {
-                        const data = getKazumaCounterData($liveMessage, sourceImage);
-                        if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
-                            window.kazumaIsGeneratingNew = false;
-                            const newSrc = $modalImg.attr('src');
-                            if (newSrc) {
-                                sourceImage.attr('src', newSrc); // Sync back
-                            }
-                        } else {
-                            if (window.kazumaFrozenSrc && $modalImg.attr('src') !== window.kazumaFrozenSrc) {
-                                $modalImg.attr('src', window.kazumaFrozenSrc); // Block the flash
-                            }
-                        }
+                if (mutation.type === 'attributes' && mutation.attributeName === 'src') shouldCheck = true;
+                if (mutation.type === 'childList') shouldCheck = true;
+            });
+
+            if (shouldCheck && window.kazumaIsGeneratingNew) {
+                // Dynamically fetch live message to avoid reading a detached background DOM node if ST rerendered it
+                const $liveMsg = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+                const data = getKazumaCounterData($liveMsg.length ? $liveMsg : $liveMessage, sourceImage);
+                const $currentModalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
+
+                if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
+                    window.kazumaIsGeneratingNew = false;
+                    if ($currentModalImg.length && $currentModalImg.attr('src')) {
+                        sourceImage.attr('src', $currentModalImg.attr('src')); // Sync back to background
+                    }
+                } else {
+                    if ($currentModalImg.length && window.kazumaFrozenSrc && $currentModalImg.attr('src') !== window.kazumaFrozenSrc) {
+                        $currentModalImg.attr('src', window.kazumaFrozenSrc); // Block the flash
                     }
                 }
-            });
+            }
         });
-        window.kazumaActiveObserver.observe($modalImg[0], { attributes: true, attributeFilter: ['src'] });
+        window.kazumaActiveObserver.observe($modal[0], { attributes: true, attributeFilter: ['src'], childList: true, subtree: true });
 
         $modal.find('.kazuma-lightbox-controls').remove();
         
