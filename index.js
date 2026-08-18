@@ -1055,39 +1055,70 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-        if (!$wrapper.length) $wrapper = sourceImage.parent();
+        // 1. Find native ST controls
+        let $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$container.length) $container = sourceImage.parent();
         
-        const $sourceElements = $wrapper.children().not('img, picture, video, a');
+        // Search up to the wrapper for controls, or grab siblings
+        let $sourceElements = $container.parent().find('.hover-menu, .media-controls, .image-controls, [class*="control"]').not('.kazuma-lightbox-controls');
+        if (!$sourceElements.length) {
+            $sourceElements = $container.children().not('img, picture, video, a');
+        }
         
-        if ($sourceElements.length) {
+        // 2. Extract the prompt (stored in title)
+        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
+        
+        // Even if there are no source elements, if we have a prompt, we should create the controls wrapper
+        if ($sourceElements.length || promptText) {
             const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-            $clonedControls.append($sourceElements.clone(true, true));
+            
+            if ($sourceElements.length) {
+                $clonedControls.append($sourceElements.clone(true, true));
+            }
+            
+            if (promptText) {
+                // Add the prompt text as an overlay
+                const $promptOverlay = $('<div></div>').css({
+                    position: 'absolute',
+                    bottom: '20px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(0,0,0,0.7)',
+                    color: 'white',
+                    padding: '10px 15px',
+                    borderRadius: '8px',
+                    maxWidth: '80%',
+                    textAlign: 'center',
+                    fontSize: '14px',
+                    pointerEvents: 'auto',
+                    zIndex: 2147483647,
+                    fontFamily: 'sans-serif'
+                }).text(promptText);
+                $clonedControls.append($promptOverlay);
+            }
             
             $clonedControls.css({
                 position: 'absolute',
                 top: 0, left: 0, right: 0, bottom: 0,
-                pointerEvents: 'none',
+                pointerEvents: 'none', // wrapper is passthrough
                 zIndex: 2147483647,
                 display: 'block'
             });
             
-            // Force buttons to be visible and clickable
-            $clonedControls.find('*').css({
+            // Force cloned buttons to be visible and clickable
+            $clonedControls.find('*').not($promptOverlay).css({
                 opacity: 1, 
                 visibility: 'visible', 
                 pointerEvents: 'auto'
             });
-            // Try to force display block on direct children if they are hidden
-            $clonedControls.children().each(function() {
+            
+            $clonedControls.children().not($promptOverlay).each(function() {
                 if ($(this).css('display') === 'none') {
                     $(this).css('display', 'flex');
                 }
             });
 
             $clonedControls.on('click', '*', function(e) {
-                // We rely on the cloned event handler to actually do the work
-                // But we must update the modal image afterwards
                 e.stopPropagation();
                 updateModalImg();
             });
