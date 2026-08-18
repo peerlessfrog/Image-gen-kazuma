@@ -1055,71 +1055,86 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $message = sourceImage.closest('.mes_text');
-        let $mediaContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-        if (!$mediaContainer.length) $mediaContainer = sourceImage.parent();
+        const $message = sourceImage.closest('.mes_text, .message');
 
-        // Grab ALL potential controls: siblings of the container (inline gallery arrows) and children (hover menus)
-        let $siblingControls = $mediaContainer.siblings().not('br, hr, p, span, .mes_text');
-        let $innerControls = $mediaContainer.children().not('img, picture, video, a, source');
-        let $sourceElements = $siblingControls.add($innerControls).not('.kazuma-lightbox-controls');
-
-        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-        
         $clonedControls.css({
-            position: 'absolute',
-            top: 0, left: 0, right: 0, bottom: 0,
-            pointerEvents: 'none',
-            zIndex: 2147483647,
-            display: 'block'
+            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+            pointerEvents: 'none', zIndex: 2147483647, display: 'block'
         });
 
-        // Proxy Array for Swipe Logic
-        let proxiedPrev = null;
-        let proxiedNext = null;
+        // 1. Explicit Prev/Next Navigation for Inner-Side Slides
+        const nextSelectors = '.right_menu_button, .right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]';
+        const prevSelectors = '.left_menu_button, .left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]';
+        
+        const $realNext = $message.find(nextSelectors).not('.kazuma-lightbox-controls *').closest('button, div, a, span').first();
+        const $realPrev = $message.find(prevSelectors).not('.kazuma-lightbox-controls *').closest('button, div, a, span').first();
 
-        // Clone each control and map its click to the original element
-        $sourceElements.each(function() {
-            let $orig = $(this);
-            let $clone = $orig.clone(false, false).removeAttr('id'); // don't copy events or IDs
-            
-            // Check if this is likely a prev/next button for swipe logic
-            const htmlStr = $orig[0].outerHTML.toLowerCase();
-            if (htmlStr.includes('left') || htmlStr.includes('prev')) proxiedPrev = $orig;
-            if (htmlStr.includes('right') || htmlStr.includes('next')) proxiedNext = $orig;
+        if ($realPrev.length) {
+            const $btnPrev = $('<div><i class="fa-solid fa-chevron-left"></i></div>').css({
+                position: 'absolute', left: '20px', top: '50%', transform: 'translateY(-50%)',
+                pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+                background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
+                cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
+            });
+            $btnPrev.on('click', function(e) { e.stopPropagation(); e.preventDefault(); $realPrev.click(); updateModalImg(); });
+            $clonedControls.append($btnPrev);
+        }
 
-            $clone.on('click', function(e) {
-                e.stopPropagation();
-                e.preventDefault();
-                $orig.click(); // Trigger native click on the original hidden element
-                updateModalImg();
+        if ($realNext.length) {
+            const $btnNext = $('<div><i class="fa-solid fa-chevron-right"></i></div>').css({
+                position: 'absolute', right: '20px', top: '50%', transform: 'translateY(-50%)',
+                pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+                background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
+                cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
+            });
+            $btnNext.on('click', function(e) { e.stopPropagation(); e.preventDefault(); $realNext.click(); updateModalImg(); });
+            $clonedControls.append($btnNext);
+        }
+
+        // 2. Map and Clone Extra Controls (Refresh, Delete, etc.)
+        const $extraControls = $message.find('.hover-menu, .media-controls, .image-controls').not('.kazuma-lightbox-controls, .kazuma-lightbox-controls *');
+        
+        if ($extraControls.length) {
+            let kazumaIdCounter = 0;
+            // Assign unique IDs to originals so we can perfectly map clicks back
+            $extraControls.find('*').addBack().each(function() {
+                let id = `kzm-${Date.now()}-${kazumaIdCounter++}`;
+                $(this).attr('data-kazuma-id', id);
             });
 
-            // Force visibility
-            $clone.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
-            $clone.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
-            if ($clone.css('display') === 'none') $clone.css('display', 'flex');
+            $extraControls.each(function() {
+                let $clone = $(this).clone(false, false).removeAttr('id');
+                
+                $clone.css({
+                    position: 'absolute', top: '20px', right: '80px', 
+                    pointerEvents: 'auto', opacity: 1, visibility: 'visible',
+                    display: 'flex', background: 'rgba(0,0,0,0.5)', borderRadius: '8px', padding: '5px'
+                });
+                
+                $clone.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+                if ($clone.css('display') === 'none') $clone.css('display', 'flex');
 
-            $clonedControls.append($clone);
-        });
+                $clone.on('click', '[data-kazuma-id]', function(e) {
+                    e.stopPropagation(); e.preventDefault();
+                    let id = $(this).attr('data-kazuma-id');
+                    $message.find(`[data-kazuma-id="${id}"]`).click();
+                    updateModalImg();
+                });
+                
+                $clonedControls.append($clone);
+            });
+        }
 
-        // Add the prompt overlay
+        // 3. Prompt Overlay
+        const promptText = sourceImage.attr('title') || sourceImage.attr('alt') || '';
         if (promptText) {
             const $promptOverlay = $('<div></div>').css({
-                position: 'absolute',
-                bottom: '20px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                background: 'rgba(0,0,0,0.7)',
-                color: 'white',
-                padding: '10px 15px',
-                borderRadius: '8px',
-                maxWidth: '80%',
-                textAlign: 'center',
-                fontSize: '14px',
-                pointerEvents: 'auto',
-                zIndex: 2147483647,
+                position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(0,0,0,0.7)', color: 'white', padding: '10px 15px', borderRadius: '8px',
+                maxWidth: '80%', textAlign: 'center', fontSize: '14px', pointerEvents: 'auto',
                 fontFamily: 'sans-serif'
             }).text(promptText);
             $clonedControls.append($promptOverlay);
@@ -1134,18 +1149,14 @@ function applyWorkflowState(state) {
             $modal.append($clonedControls);
         }
 
-        // --- Swipe functionality (Top-Level Native Capturing) ---
-        let touchStartX = 0;
-        let touchEndX = 0;
-        
+        // 4. Swipe Functionality (Top-Level Native Capturing)
+        let touchStartX = 0, touchEndX = 0;
         if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
         if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
 
         window._kazumaTouchStart = function(e) {
             if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            if (e.changedTouches) {
-                touchStartX = e.changedTouches[0].screenX;
-            }
+            if (e.changedTouches) touchStartX = e.changedTouches[0].screenX;
         };
 
         window._kazumaTouchEnd = function(e) {
@@ -1153,20 +1164,10 @@ function applyWorkflowState(state) {
             if (e.changedTouches) {
                 touchEndX = e.changedTouches[0].screenX;
                 const threshold = 40;
-                
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    if (proxiedNext) { 
-                        e.preventDefault(); e.stopPropagation();
-                        proxiedNext.click(); 
-                        updateModalImg(); 
-                    }
-                }
-                else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    if (proxiedPrev) { 
-                        e.preventDefault(); e.stopPropagation();
-                        proxiedPrev.click(); 
-                        updateModalImg(); 
-                    }
+                    if ($realNext.length) { e.preventDefault(); e.stopPropagation(); $realNext.click(); updateModalImg(); }
+                } else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    if ($realPrev.length) { e.preventDefault(); e.stopPropagation(); $realPrev.click(); updateModalImg(); }
                 }
             }
         };
@@ -1182,12 +1183,8 @@ function applyWorkflowState(state) {
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
                         if ($currentImg.length) sourceImage = $currentImg;
-                        
-                        // Update prompt text if it changed
                         const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
-                        if (newPrompt) {
-                            $clonedControls.find('div').last().text(newPrompt);
-                        }
+                        if (newPrompt) $clonedControls.find('div').last().text(newPrompt);
                     }
                 }
             }, 100);
