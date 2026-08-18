@@ -1179,51 +1179,56 @@ function applyWorkflowState(state) {
 
         function updateCounterUI() {
             if (!$counter) return;
-            
-            // 1. Try to sync with SillyTavern's native Message Variant swipe counter first
-            let swipeInfo = '';
+
+            let counterText = '';
             let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
             if (!$liveMessage.length) $liveMessage = sourceImage ? sourceImage.closest('.mes') : null;
-            
+
+            // 1. Aggressive regex scraper for #/# pattern in the UI
+            // Targets the exact native .mes_img_swipe_counter class, then falls back to sweeping the entire media container
             if ($liveMessage && $liveMessage.length) {
-                const $swipeInfoNode = $liveMessage.find('.swipe_info');
-                if ($swipeInfoNode.length) swipeInfo = $swipeInfoNode.text().trim();
-            }
-            
-            if (swipeInfo) {
-                $counter.text(swipeInfo);
-                $counter.show();
-                return;
+                let text = $liveMessage.find('.mes_img_swipe_counter, .swipe_info').text();
+                if (!text) text = $liveMessage.find('.mes_media_container, [class*="gallery"], .mes_text').text();
+                if (!text) text = $liveMessage.find('.mes_buttons, [class*="swipe"]').text();
+                
+                let match = text.match(/(\d+)\s*\/\s*(\d+)/);
+                if (match) counterText = `${match[1]} / ${match[2]}`;
             }
 
-            // 2. Try reading ST's internal chat state for inline gallery arrays
-            if (messageId !== undefined && typeof getContext === 'function') {
+            // 2. Try reading ST's internal chat state for msg.swipes or image_links arrays
+            if (!counterText && messageId !== undefined && typeof getContext === 'function') {
                 const chat = getContext().chat;
                 const msg = chat ? chat[messageId] : null;
-                if (msg && msg.extra && Array.isArray(msg.extra.image_links) && msg.extra.image_links.length > 1) {
-                    const totalSlides = msg.extra.image_links.length;
-                    let currentIndex = 0;
-                    const currentSrc = sourceImage.attr('src');
-                    msg.extra.image_links.forEach((link, i) => {
-                        // Relaxed match because src might be absolute while link is relative
-                        if (currentSrc.includes(link) || link.includes(currentSrc)) currentIndex = i;
-                    });
-                    $counter.text(`${currentIndex + 1} / ${totalSlides}`);
-                    $counter.show();
-                    return;
+                if (msg) {
+                    if (Array.isArray(msg.swipes) && msg.swipes.length > 1) {
+                        counterText = `${(msg.swipe_id || 0) + 1} / ${msg.swipes.length}`;
+                    } else if (msg.extra && Array.isArray(msg.extra.image_links) && msg.extra.image_links.length > 1) {
+                        const total = msg.extra.image_links.length;
+                        let current = 0;
+                        const currentSrc = sourceImage.attr('src');
+                        msg.extra.image_links.forEach((link, i) => {
+                            if (currentSrc.includes(link) || link.includes(currentSrc)) current = i;
+                        });
+                        counterText = `${current + 1} / ${total}`;
+                    }
                 }
             }
 
             // 3. Fallback to raw DOM inline gallery size tracking
-            const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
-            const totalSlides = $galleryImages.length;
-            if (totalSlides > 1) {
-                let currentIndex = 0;
-                $galleryImages.each(function(i) {
-                    if ($(this).attr('src') === sourceImage.attr('src')) currentIndex = i;
-                });
-                $counter.text(`${currentIndex + 1} / ${totalSlides}`);
-                $counter.show();
+            if (!counterText) {
+                const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
+                const totalSlides = $galleryImages.length;
+                if (totalSlides > 1) {
+                    let currentIndex = 0;
+                    $galleryImages.each(function(i) {
+                        if ($(this).attr('src') === sourceImage.attr('src')) currentIndex = i;
+                    });
+                    counterText = `${currentIndex + 1} / ${totalSlides}`;
+                }
+            }
+
+            if (counterText) {
+                $counter.text(counterText).show();
             } else {
                 $counter.hide();
             }
