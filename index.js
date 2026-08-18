@@ -1058,10 +1058,11 @@ function applyWorkflowState(state) {
         const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
         const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
         const messageId = $message.attr('mes');
+        const messageIndex = $('.mes').index($message);
         
         // Find Swipe next/prev for mobile touch & floating arrows
-        const $realNext = $message.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right, .mes_text *').closest('div, button, a, span, i').first();
-        const $realPrev = $message.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right, .mes_text *').closest('div, button, a, span, i').first();
+        const $realNext = $message.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
+        const $realPrev = $message.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
 
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
         $clonedControls.css({
@@ -1126,12 +1127,13 @@ function applyWorkflowState(state) {
         // --- Shared Navigation Methods ---
         function doNext(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
-            const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : sourceImage.closest('.mes');
+            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+            if (!$currentMessage.length) $currentMessage = sourceImage.closest('.mes');
             if (!$currentMessage.length) return;
 
-            const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right, .mes_text *').closest('div, button, a, span, i').first();
+            const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
             
-            if ($currentNext.length && $currentNext.is(':visible')) { 
+            if ($currentNext.length) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentNext.click(); 
                 pollForSrcChange(oldSrc);
@@ -1145,12 +1147,13 @@ function applyWorkflowState(state) {
 
         function doPrev(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
-            const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : sourceImage.closest('.mes');
+            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+            if (!$currentMessage.length) $currentMessage = sourceImage.closest('.mes');
             if (!$currentMessage.length) return;
 
-            const $currentPrev = $currentMessage.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right, .mes_text *').closest('div, button, a, span, i').first();
+            const $currentPrev = $currentMessage.find('.left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
             
-            if ($currentPrev.length && $currentPrev.is(':visible')) { 
+            if ($currentPrev.length) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentPrev.click(); 
                 pollForSrcChange(oldSrc);
@@ -1263,13 +1266,13 @@ function applyWorkflowState(state) {
             let minDiff = Infinity;
             const $container = $currentMessage.find('.mes_media_container, .inline-image-container, .gallery-image').first();
             if (!$container.length) {
-                return $currentMessage.find('img:visible').not('.kazuma-lightbox-controls img').first();
+                return $currentMessage.find('img').not('.kazuma-lightbox-controls img').filter(function() { return $(this).is(':visible') && parseFloat($(this).css('opacity')) !== 0; }).first();
             }
             
             const containerLeft = $container.offset().left;
             
             $container.find('img').not('.kazuma-lightbox-controls img').each(function() {
-                if (!$(this).is(':visible')) return;
+                if (!$(this).is(':visible') || parseFloat($(this).css('opacity')) === 0) return;
                 const imgLeft = $(this).offset().left;
                 const diff = Math.abs(imgLeft - containerLeft);
                 
@@ -1279,11 +1282,12 @@ function applyWorkflowState(state) {
                 }
             });
             
-            return $activeImg || $container.find('img:visible').not('.kazuma-lightbox-controls img').first();
+            return $activeImg || $container.find('img').not('.kazuma-lightbox-controls img').filter(function() { return $(this).is(':visible') && parseFloat($(this).css('opacity')) !== 0; }).first();
         }
 
         function pollForSrcChange(oldSrc, attempts = 0) {
-            const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : (sourceImage ? sourceImage.closest('.mes') : null);
+            let $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
+            if (!$currentMessage.length) $currentMessage = sourceImage ? sourceImage.closest('.mes') : null;
             if (!$currentMessage || !$currentMessage.length) return;
             
             const $liveImg = getActiveImage($currentMessage);
