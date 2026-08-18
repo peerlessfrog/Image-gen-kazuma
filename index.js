@@ -1237,7 +1237,7 @@ function applyWorkflowState(state) {
             // Replicate the original Kazuma lightbox control styling exactly
             $clonedHover.css({
                 position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
-                display: 'flex', justifyContent: 'center', alignItems: 'center', pointerEvents: 'auto',
+                display: 'flex', justifyContent: 'center', alignItems: 'center', pointerEvents: 'none',
                 opacity: 1, visibility: 'visible', width: '100%', background: 'transparent'
             });
             
