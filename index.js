@@ -1180,11 +1180,7 @@ function applyWorkflowState(state) {
                 const $currentModalImg = $('.img_enlarged, #dialogue_popup img, .mfp-wrap img').not('.kazuma-lightbox-controls img').first();
 
                 if (data && data.total >= window.kazumaExpectedTotal && data.current === data.total) {
-                    window.kazumaIsGeneratingNew = false;
-                    if ($currentModalImg.length && $currentModalImg.attr('src')) {
-                        sourceImage.attr('src', $currentModalImg.attr('src')); // Sync back to background
-                        if (typeof updateCounterUI === 'function') updateCounterUI(); // Force counter update!
-                    }
+                    // Do nothing here. pollForGenerationComplete will handle dropping the freeze and pushing the new image cleanly!
                 } else {
                     if ($currentModalImg.length && window.kazumaFrozenSrc && $currentModalImg.attr('src') !== window.kazumaFrozenSrc) {
                         $currentModalImg.attr('src', window.kazumaFrozenSrc); // Block the flash
