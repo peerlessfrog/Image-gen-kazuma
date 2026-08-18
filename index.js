@@ -647,6 +647,23 @@ async function onImageSwiped(data) {
 
     if (idx < media.length - 1) return;
 
+    // ST natively wraps the inline gallery back to 1/count visually when swiping past the end.
+    // Instantly revert the inline DOM back to last/last so it stays frozen during generation.
+    if (element) {
+        const $targetElement = $(element);
+        const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
+        if ($mes.length) {
+            const $counter = $mes.find('.mes_img_swipe_counter');
+            if ($counter.length) $counter.text(`${media.length} / ${media.length}`);
+            
+            const $img = $mes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img');
+            if ($img.length && media.length > 0) {
+                const lastImgUrl = media[media.length - 1].url;
+                $img.each(function() { $(this).attr('src', lastImgUrl); });
+            }
+        }
+    }
+
     const mediaObj = media[idx];
     if (!mediaObj || !mediaObj.title) return;
 
@@ -1301,19 +1318,21 @@ function applyWorkflowState(state) {
                 if (typeof toastr !== 'undefined') toastr.info("Generating new image...", "Image Gen Kazuma");
             }
 
-            if ($currentNext.length) { 
+            if ($currentNext.length && !window.kazumaIsGeneratingNew) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentNext.click(); 
-                if (!window.kazumaIsGeneratingNew) {
-                    pollForSrcChange(oldSrc);
-                } else {
-                    pollForGenerationComplete();
-                }
+                pollForSrcChange(oldSrc);
             } else {
+                // If generating, bypass the native click to prevent ST from wrapping the inline gallery
                 if (messageId !== undefined && typeof getContext === 'function') {
                     const chat = getContext().chat;
-                    if (chat && chat[messageId]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'right', element: sourceImage });
+                    if (chat && chat[messageId]) {
+                        if (!chat[messageId].extra) chat[messageId].extra = {};
+                        if (chat[messageId].extra.media) chat[messageId].extra.media_index = chat[messageId].extra.media.length - 1;
+                        eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[messageId], direction: 'right', element: sourceImage });
+                    }
                 }
+                if (window.kazumaIsGeneratingNew) pollForGenerationComplete();
             }
         }
 
