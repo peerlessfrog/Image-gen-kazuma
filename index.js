@@ -576,7 +576,7 @@ async function generateWithComfy(positivePrompt, target = null) {
 
     try {
         toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
-        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow }) });
+        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, front: true }) });
         if(!res.ok) throw new Error("Failed");
         const data = await res.json();
         await waitForGeneration(url, data.prompt_id, positivePrompt, target);
@@ -973,7 +973,7 @@ function applyWorkflowState(state) {
         
         enhanceInterval = setInterval(() => {
             attempts++;
-            if (attempts > 40) { // 2 seconds timeout
+            if (attempts > 60) { // 3 seconds timeout
                 clearInterval(enhanceInterval);
                 return;
             }
@@ -991,8 +991,8 @@ function applyWorkflowState(state) {
     }
 
     document.addEventListener('click', function(e) {
-        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
-        if ($img.length) {
+        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image, img');
+        if ($img.length && $img.closest('.mes_text, .mes_media_container').length) {
             if (window.innerWidth <= 1024) {
                 if (window.lastTappedGalleryImage !== $img[0]) {
                     e.preventDefault();
@@ -1015,29 +1015,37 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
+        const $wrapper = sourceImage.parent();
+        const $sourceElements = $wrapper.children().not('img, picture, video');
         
-        if ($controls.length) {
-            const $clonedControls = $controls.clone(true, true);
-            $clonedControls.addClass('kazuma-lightbox-controls');
+        if ($sourceElements.length) {
+            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+            $clonedControls.append($sourceElements.clone(true, true));
+            
             $clonedControls.css({
                 position: 'absolute',
-                bottom: '30px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex',
-                justifyContent: 'center',
-                zIndex: 999999,
-                pointerEvents: 'auto',
-                opacity: 1,
-                visibility: 'visible',
-                width: '100%',
-                background: 'transparent'
+                top: 0, left: 0, right: 0, bottom: 0,
+                pointerEvents: 'none',
+                zIndex: 2147483647,
+                display: 'block'
             });
-            $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
+            
+            // Force buttons to be visible and clickable
+            $clonedControls.find('*').css({
+                opacity: 1, 
+                visibility: 'visible', 
+                pointerEvents: 'auto'
+            });
+            // Try to force display block on direct children if they are hidden
+            $clonedControls.children().each(function() {
+                if ($(this).css('display') === 'none') {
+                    $(this).css('display', 'flex');
+                }
+            });
 
             $clonedControls.on('click', '*', function(e) {
+                // We rely on the cloned event handler to actually do the work
+                // But we must update the modal image afterwards
                 e.stopPropagation();
                 updateModalImg();
             });
@@ -1048,35 +1056,37 @@ function applyWorkflowState(state) {
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
             } else {
+                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
                 $modal.append($clonedControls);
             }
         }
 
-        // Swipe functionality
+        // --- Swipe functionality (Native Capturing) ---
         let touchStartX = 0;
         let touchEndX = 0;
         
-        // Find best touch target so we don't block ST's outer dismiss clicks
-        const touchTarget = $modal.find('.fancybox__viewport, .mfp-wrap, .modal-content, #dialogue_popup_text').first();
-        const $touch = touchTarget.length ? touchTarget : $modal;
+        // We bind to the modal container directly
+        const modalEl = $modal[0];
+        
+        if (modalEl._kazumaTouchStart) modalEl.removeEventListener('touchstart', modalEl._kazumaTouchStart, true);
+        if (modalEl._kazumaTouchEnd) modalEl.removeEventListener('touchend', modalEl._kazumaTouchEnd, true);
 
-        $touch.off('touchstart.kazuma touchend.kazuma');
-        
-        $touch.on('touchstart.kazuma', function(e) {
-            if (e.originalEvent && e.originalEvent.changedTouches) {
-                touchStartX = e.originalEvent.changedTouches[0].screenX;
+        modalEl._kazumaTouchStart = function(e) {
+            if (e.changedTouches) {
+                touchStartX = e.changedTouches[0].screenX;
             }
-        });
-        
-        $touch.on('touchend.kazuma', function(e) {
-            if (e.originalEvent && e.originalEvent.changedTouches) {
-                touchEndX = e.originalEvent.changedTouches[0].screenX;
+        };
+
+        modalEl._kazumaTouchEnd = function(e) {
+            if (e.changedTouches) {
+                touchEndX = e.changedTouches[0].screenX;
                 const threshold = 50;
+                const $container = sourceImage.closest('.mes_media_container, .gallery-image').parent();
+                
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
                     const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
                     if ($next.length) { 
-                        e.preventDefault();
-                        e.stopPropagation();
+                        e.preventDefault(); e.stopPropagation();
                         $next.click(); 
                         updateModalImg(); 
                     }
@@ -1084,14 +1094,16 @@ function applyWorkflowState(state) {
                 if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
                     const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
                     if ($prev.length) { 
-                        e.preventDefault();
-                        e.stopPropagation();
+                        e.preventDefault(); e.stopPropagation();
                         $prev.click(); 
                         updateModalImg(); 
                     }
                 }
             }
-        });
+        };
+
+        modalEl.addEventListener('touchstart', modalEl._kazumaTouchStart, true);
+        modalEl.addEventListener('touchend', modalEl._kazumaTouchEnd, true);
 
         function updateModalImg() {
             setTimeout(() => {
