@@ -1059,8 +1059,8 @@ function applyWorkflowState(state) {
         const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
         
         // Find Swipe next/prev for mobile touch & floating arrows
-        const $realNext = $message.find('.right_menu_button, .right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *').closest('div, button, a, span, i').first();
-        const $realPrev = $message.find('.left_menu_button, .left_arrow, .gallery_prev, .media_prev, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *').closest('div, button, a, span, i').first();
+        const $realNext = $message.find('.fa-chevron-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+        const $realPrev = $message.find('.fa-chevron-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
 
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
         $clonedControls.css({
@@ -1126,10 +1126,20 @@ function applyWorkflowState(state) {
         function doNext(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
             if ($realNext.length) { $realNext.click(); updateModalImg(); }
+            const id = $message.attr('mes');
+            if (id !== undefined && typeof getContext === 'function') {
+                const chat = getContext().chat;
+                if (chat && chat[id]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[id], direction: 'right', element: sourceImage });
+            }
         }
         function doPrev(e) {
             if (e) { e.stopPropagation(); e.preventDefault(); }
             if ($realPrev.length) { $realPrev.click(); updateModalImg(); }
+            const id = $message.attr('mes');
+            if (id !== undefined && typeof getContext === 'function') {
+                const chat = getContext().chat;
+                if (chat && chat[id]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[id], direction: 'left', element: sourceImage });
+            }
         }
 
         if ($realPrev.length) {
@@ -1171,13 +1181,14 @@ function applyWorkflowState(state) {
         $modalImg.on('dragstart', function(e) { e.preventDefault(); });
 
         // --- Universal Swipe/Drag functionality ---
-        let startX = 0, isDragging = false;
+        let startX = 0, isDragging = false, wasSwiped = false;
         
         if (window._kazumaDown) {
             window.removeEventListener('touchstart', window._kazumaDown, true);
             window.removeEventListener('mousedown', window._kazumaDown, true);
             window.removeEventListener('touchend', window._kazumaUp, true);
             window.removeEventListener('mouseup', window._kazumaUp, true);
+            if (window._kazumaClickBlocker) window.removeEventListener('click', window._kazumaClickBlocker, true);
         }
 
         window._kazumaDown = function(e) {
@@ -1209,16 +1220,23 @@ function applyWorkflowState(state) {
 
             const threshold = 40;
             if (endX < startX - threshold) { // Swipe Left (Next)
+                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
                 doNext(e);
             } else if (endX > startX + threshold) { // Swipe Right (Prev)
+                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
                 doPrev(e);
             }
+        };
+
+        window._kazumaClickBlocker = function(e) {
+            if (wasSwiped) { e.stopPropagation(); e.preventDefault(); }
         };
 
         window.addEventListener('touchstart', window._kazumaDown, true);
         window.addEventListener('mousedown', window._kazumaDown, true);
         window.addEventListener('touchend', window._kazumaUp, true);
         window.addEventListener('mouseup', window._kazumaUp, true);
+        window.addEventListener('click', window._kazumaClickBlocker, true);
 
         function updateModalImg() {
             setTimeout(() => {
