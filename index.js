@@ -1179,36 +1179,7 @@ function applyWorkflowState(state) {
 
         function updateCounterUI() {
             if (!$counter) return;
-            
-            // Try to sync with SillyTavern's native Message Variant swipe counter first
-            let swipeInfo = '';
-            let $liveMessage = messageId ? $('.mes[mes="' + messageId + '"]') : $('.mes').eq(messageIndex);
-            if (!$liveMessage.length) $liveMessage = sourceImage ? sourceImage.closest('.mes') : null;
-            
-            if ($liveMessage && $liveMessage.length) {
-                const $swipeInfoNode = $liveMessage.find('.swipe_info');
-                if ($swipeInfoNode.length) swipeInfo = $swipeInfoNode.text().trim();
-            }
-            
-            if (swipeInfo) {
-                $counter.text(swipeInfo);
-                $counter.show();
-                return;
-            }
-
-            // Fallback to inline gallery size tracking
-            const $galleryImages = $container.find('img').not('.kazuma-lightbox-controls img');
-            const totalSlides = $galleryImages.length;
-            if (totalSlides > 1) {
-                let currentIndex = 0;
-                $galleryImages.each(function(i) {
-                    if ($(this).attr('src') === sourceImage.attr('src')) currentIndex = i;
-                });
-                $counter.text(`${currentIndex + 1} / ${totalSlides}`);
-                $counter.show();
-            } else {
-                $counter.hide();
-            }
+            $counter.text("TESTING 123").show();
         }
         updateCounterUI();
 
