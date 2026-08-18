@@ -810,7 +810,47 @@ jQuery(async () => {
             // 3. Update Pointer
             extension_settings[extensionName].currentWorkflowName = newWorkflow;
             saveSettingsDebounced();
+
+            // CHAT LOCK LOGIC
+            const isLocked = $("#kazuma_lock_preset").prop("checked");
+            if (isLocked) {
+                const { chatMetadata } = SillyTavern.getContext();
+                if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
+                chatMetadata['image-gen-kazuma'].lockedPreset = newWorkflow;
+                saveChat();
+            }
         });
+
+        $("#kazuma_lock_preset").on("change", function() {
+            const isLocked = $(this).prop("checked");
+            const { chatMetadata } = SillyTavern.getContext();
+            if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
+            
+            if (isLocked) {
+                chatMetadata['image-gen-kazuma'].lockedPreset = extension_settings[extensionName].currentWorkflowName;
+            } else {
+                delete chatMetadata['image-gen-kazuma'].lockedPreset;
+            }
+            saveChat();
+        });
+
+        eventSource.on(event_types.CHAT_CHANGED, function() {
+            const { chatMetadata } = SillyTavern.getContext();
+            if (chatMetadata && chatMetadata['image-gen-kazuma'] && chatMetadata['image-gen-kazuma'].lockedPreset) {
+                const lockedPreset = chatMetadata['image-gen-kazuma'].lockedPreset;
+                if (extension_settings[extensionName].savedWorkflowStates && extension_settings[extensionName].savedWorkflowStates[lockedPreset]) {
+                    // Switch to the locked preset if it's not already selected
+                    if ($("#kazuma_workflow_list").val() !== lockedPreset) {
+                        $("#kazuma_workflow_list").val(lockedPreset).trigger('change');
+                    }
+                    $("#kazuma_lock_preset").prop("checked", true);
+                    return;
+                }
+            }
+            // If no lock or preset doesn't exist anymore
+            $("#kazuma_lock_preset").prop("checked", false);
+        });
+
         $("#kazuma_import_btn").on("click", () => $("#kazuma_import_file").click());
 
         // New Logic Events
@@ -978,11 +1018,11 @@ function applyWorkflowState(state) {
                 return;
             }
             
-            // Check for ST standard modals and Fancybox
-            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
+            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible, dialog.popup[open], .popup.transparent_dialogue_popup:visible').first();
+            
             if ($modal.length) {
                 const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
-                if ($modalImg.length) {
+                if ($modalImg.length && $modalImg.attr('src')) {
                     clearInterval(enhanceInterval);
                     enhanceLightbox($modal, $modalImg);
                 }
@@ -1015,104 +1055,209 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $wrapper = sourceImage.parent();
-        const $sourceElements = $wrapper.children().not('img, picture, video');
+        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        const $message = sourceImage.closest('.mes'); // Broadest scope for arrows
         
-        if ($sourceElements.length) {
-            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-            $clonedControls.append($sourceElements.clone(true, true));
-            
-            $clonedControls.css({
-                position: 'absolute',
-                top: 0, left: 0, right: 0, bottom: 0,
-                pointerEvents: 'none',
-                zIndex: 2147483647,
-                display: 'block'
-            });
-            
-            // Force buttons to be visible and clickable
-            $clonedControls.find('*').css({
-                opacity: 1, 
-                visibility: 'visible', 
-                pointerEvents: 'auto'
-            });
-            // Try to force display block on direct children if they are hidden
-            $clonedControls.children().each(function() {
-                if ($(this).css('display') === 'none') {
-                    $(this).css('display', 'flex');
-                }
+        // Find Swipe next/prev for mobile touch & floating arrows
+        const $realNext = $message.find('.fa-chevron-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+        const $realPrev = $message.find('.fa-chevron-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+
+        const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+        $clonedControls.css({
+            position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+            pointerEvents: 'none', zIndex: 2147483647, display: 'block'
+        });
+
+        // 1. Map and Clone the Hover Menu (Refresh, Delete, etc.)
+        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').not('.kazuma-lightbox-controls *').first();
+        if ($controls.length) {
+            let kazumaIdCounter = 0;
+            // Assign unique IDs to originals so we can perfectly map clicks back
+            $controls.find('*').addBack().each(function() {
+                let id = `kzm-${Date.now()}-${kazumaIdCounter++}`;
+                $(this).attr('data-kazuma-id', id);
             });
 
-            $clonedControls.on('click', '*', function(e) {
-                // We rely on the cloned event handler to actually do the work
-                // But we must update the modal image afterwards
-                e.stopPropagation();
+            const $clonedHover = $controls.clone(false, false).removeAttr('id');
+            
+            // Replicate the original Kazuma lightbox control styling exactly
+            $clonedHover.css({
+                position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
+                display: 'flex', justifyContent: 'center', pointerEvents: 'auto',
+                opacity: 1, visibility: 'visible', width: '100%', background: 'transparent'
+            });
+            
+            $clonedHover.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+
+            // Perfect proxy clicks
+            $clonedHover.on('click', '[data-kazuma-id]', function(e) {
+                e.stopPropagation(); e.preventDefault();
+                let id = $(this).attr('data-kazuma-id');
+                $container.find(`[data-kazuma-id="${id}"]`).click();
                 updateModalImg();
             });
 
-            // Target the best container to append to
-            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
-            if ($target.length) {
-                if ($target.css('position') === 'static') $target.css('position', 'relative');
-                $target.append($clonedControls);
-            } else {
-                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
-                $modal.append($clonedControls);
+            $clonedHover.on('click', function(e) {
+                e.stopPropagation();
+            });
+            
+            // Expose a reference so we can add the arrows into it below
+            $clonedControls.data('kazumaHover', $clonedHover);
+            $clonedControls.append($clonedHover);
+        }
+
+        // Removed explicit Prompt overlay since SillyTavern natively provides a copyable block
+
+        // 3. Explicit Left/Right Arrows for Lightbox Navigation!
+        const $hoverRef = $clonedControls.data('kazumaHover');
+        const arrowCssInline = {
+            cursor: 'pointer', margin: '0 5px', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', fontSize: '18px', color: 'var(--smart-text-color, white)'
+        };
+        const arrowCssFloating = {
+            position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+            pointerEvents: 'auto', opacity: 1, visibility: 'visible', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+            background: 'rgba(0,0,0,0.6)', padding: '15px 20px', borderRadius: '50%',
+            cursor: 'pointer', color: 'white', border: '2px solid rgba(255,255,255,0.2)'
+        };
+
+        // --- Shared Navigation Methods ---
+        function doNext(e) {
+            if (e) { e.stopPropagation(); e.preventDefault(); }
+            const $currentNext = $message.find('.fa-chevron-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+            if ($currentNext.length) { $currentNext.click(); updateModalImg(); }
+            const id = $message.attr('mes');
+            if (id !== undefined && typeof getContext === 'function') {
+                const chat = getContext().chat;
+                if (chat && chat[id]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[id], direction: 'right', element: sourceImage });
+            }
+        }
+        function doPrev(e) {
+            if (e) { e.stopPropagation(); e.preventDefault(); }
+            const $currentPrev = $message.find('.fa-chevron-left, [title*="Prev"], [title*="prev"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *').closest('div, button, a, span, i').first();
+            if ($currentPrev.length) { $currentPrev.click(); updateModalImg(); }
+            const id = $message.attr('mes');
+            if (id !== undefined && typeof getContext === 'function') {
+                const chat = getContext().chat;
+                if (chat && chat[id]) eventSource.emit(event_types.IMAGE_SWIPED, { message: chat[id], direction: 'left', element: sourceImage });
             }
         }
 
-        // --- Swipe functionality (Native Capturing) ---
-        let touchStartX = 0;
-        let touchEndX = 0;
-        
-        // We bind to the modal container directly
-        const modalEl = $modal[0];
-        
-        if (modalEl._kazumaTouchStart) modalEl.removeEventListener('touchstart', modalEl._kazumaTouchStart, true);
-        if (modalEl._kazumaTouchEnd) modalEl.removeEventListener('touchend', modalEl._kazumaTouchEnd, true);
+        if ($realPrev.length) {
+            const $btnPrev = $('<div class="menu_button interactable" title="Previous Image"><i class="fa-solid fa-chevron-left"></i></div>');
+            $btnPrev.on('click', doPrev);
+            if ($hoverRef) $hoverRef.prepend($btnPrev.css(arrowCssInline));
+            else $clonedControls.append($btnPrev.css(arrowCssFloating).css('left', '20px'));
+        }
 
-        modalEl._kazumaTouchStart = function(e) {
-            if (e.changedTouches) {
-                touchStartX = e.changedTouches[0].screenX;
+        if ($realNext.length) {
+            const $btnNext = $('<div class="menu_button interactable" title="Next Image"><i class="fa-solid fa-chevron-right"></i></div>');
+            $btnNext.on('click', doNext);
+            if ($hoverRef) $hoverRef.append($btnNext.css(arrowCssInline));
+            else $clonedControls.append($btnNext.css(arrowCssFloating).css('right', '20px'));
+        }
+
+        const $target = $modal.find('.popup-content, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+        const $appendTarget = $target.length ? $target : $modal;
+
+        if ($appendTarget.css('position') === 'static') $appendTarget.css('position', 'relative');
+        $appendTarget.append($clonedControls);
+
+        // --- Instant Native CSS Hover Logic ---
+        if (!$('#kazuma-lightbox-css').length) {
+            $('head').append(`
+                <style id="kazuma-lightbox-css">
+                    .kazuma-lightbox-controls { opacity: 0; transition: opacity 0.15s ease-in-out; }
+                    .popup-content:hover .kazuma-lightbox-controls,
+                    .img_enlarged_container:hover .kazuma-lightbox-controls,
+                    .kazuma-lightbox-controls:hover { opacity: 1; }
+                    @media (pointer: coarse) {
+                        .kazuma-lightbox-controls { opacity: 1 !important; }
+                    }
+                </style>
+            `);
+        }
+
+        // Prevent native browser drag-and-drop on the image when we mouse-swipe
+        $modalImg.on('dragstart', function(e) { e.preventDefault(); });
+
+        // --- Universal Swipe/Drag functionality ---
+        let startX = 0, isDragging = false, wasSwiped = false;
+        
+        if (window._kazumaDown) {
+            window.removeEventListener('touchstart', window._kazumaDown, true);
+            window.removeEventListener('mousedown', window._kazumaDown, true);
+            window.removeEventListener('touchend', window._kazumaUp, true);
+            window.removeEventListener('mouseup', window._kazumaUp, true);
+            if (window._kazumaClickBlocker) window.removeEventListener('click', window._kazumaClickBlocker, true);
+        }
+
+        window._kazumaDown = function(e) {
+            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) return;
+            // Ignore swipes that start on text, code blocks, or buttons so we don't break normal interactions
+            if ($(e.target).closest('code, pre, .menu_button, .interactable, .popup-controls').length > 0) return;
+
+            if (e.type === 'touchstart') {
+                startX = e.changedTouches[0].screenX;
+            } else if (e.type === 'mousedown') {
+                startX = e.screenX;
+                isDragging = true;
             }
         };
 
-        modalEl._kazumaTouchEnd = function(e) {
-            if (e.changedTouches) {
-                touchEndX = e.changedTouches[0].screenX;
-                const threshold = 50;
-                const $container = sourceImage.closest('.mes_media_container, .gallery-image').parent();
-                
-                if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
-                    if ($next.length) { 
-                        e.preventDefault(); e.stopPropagation();
-                        $next.click(); 
-                        updateModalImg(); 
-                    }
-                }
-                if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
-                    if ($prev.length) { 
-                        e.preventDefault(); e.stopPropagation();
-                        $prev.click(); 
-                        updateModalImg(); 
-                    }
-                }
+        window._kazumaUp = function(e) {
+            if (!($modal.is(':visible') || $modal.prop('open')) || $(e.target).closest($modal).length === 0) {
+                isDragging = false;
+                return;
+            }
+            let endX = 0;
+            if (e.type === 'touchend') {
+                endX = e.changedTouches[0].screenX;
+            } else if (e.type === 'mouseup') {
+                if (!isDragging) return;
+                endX = e.screenX;
+                isDragging = false;
+            } else return;
+
+            const threshold = 40;
+            if (endX < startX - threshold) { // Swipe Left (Next)
+                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
+                doNext(e);
+            } else if (endX > startX + threshold) { // Swipe Right (Prev)
+                wasSwiped = true; setTimeout(() => wasSwiped = false, 100);
+                doPrev(e);
             }
         };
 
-        modalEl.addEventListener('touchstart', modalEl._kazumaTouchStart, true);
-        modalEl.addEventListener('touchend', modalEl._kazumaTouchEnd, true);
+        window._kazumaClickBlocker = function(e) {
+            if (wasSwiped) { e.stopPropagation(); e.preventDefault(); }
+        };
+
+        window.addEventListener('touchstart', window._kazumaDown, true);
+        window.addEventListener('mousedown', window._kazumaDown, true);
+        window.addEventListener('touchend', window._kazumaUp, true);
+        window.addEventListener('mouseup', window._kazumaUp, true);
+        window.addEventListener('click', window._kazumaClickBlocker, true);
 
         function updateModalImg() {
             setTimeout(() => {
                 if (sourceImage && sourceImage.length) {
-                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img').first();
+                    let $container = $message.find('img').filter(function() { return $(this).attr('src') === sourceImage.attr('src'); }).closest('.mes_media_container, .inline-image-container');
+                    if (!$container.length) $container = $message.find('.mes_media_container, .inline-image-container').first();
+                    const $currentImg = $container.find('img:visible').not('.kazuma-lightbox-controls img').first();
+                    
                     const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
                         if ($currentImg.length) sourceImage = $currentImg;
+                        const newPrompt = sourceImage.attr('title') || sourceImage.attr('alt') || '';
+                        const $titleCode = $modal.find('.img_enlarged_title');
+                        if ($titleCode.length && newPrompt) {
+                            const $copyIcon = $titleCode.find('.code-copy').clone();
+                            $titleCode.text(newPrompt);
+                            if ($copyIcon.length) $titleCode.append($copyIcon);
+                        }
                     }
                 }
             }, 100);
