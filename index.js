@@ -467,6 +467,25 @@ async function onGeneratePrompt() {
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
         const lastMessage = context.chat[context.chat.length - 1].mes;
+        let sceneText = lastMessage;
+
+        // --- SUMMARYCEPTION INTEGRATION ---
+        if (context.chatMetadata && context.chatMetadata['summaryception'] && context.chatMetadata['summaryception'].layers) {
+            const layers = context.chatMetadata['summaryception'].layers;
+            const parts = [];
+            for (let i = layers.length - 1; i >= 0; i--) {
+                const layer = layers[i];
+                if (!layer || layer.length === 0) continue;
+                for (const sn of layer) {
+                    if (sn.text) parts.push(sn.text);
+                }
+            }
+            if (parts.length > 0) {
+                sceneText = "Prior Context: " + parts.join(' ') + "\\n\\nCurrent Scene: " + lastMessage;
+            }
+        }
+        // ----------------------------------
+
         const s = extension_settings[extensionName];
 
         const style = s.promptStyle || "standard";
@@ -484,7 +503,7 @@ async function onGeneratePrompt() {
 
         const instruction = `
             Task: Write an image generation prompt for the following scene.
-            Scene: "${lastMessage}"
+            Scene: "${sceneText}"
             Style Constraint: ${styleInst}
             Perspective: ${perspInst}
             Additional Req: ${extra}
