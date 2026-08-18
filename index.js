@@ -762,19 +762,20 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
 
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             
-            // Force inline visual sync to bypass ST DOM diffing laziness (Loop to beat async redraws)
+            // Force inline visual sync to bypass ST DOM diffing laziness (Loop to beat async redraws & animation clones)
             if (mesId) {
                 let syncAttempts = 0;
                 const syncLoop = setInterval(() => {
                     syncAttempts++;
                     const $liveMes = $('.mes[mes="' + mesId + '"]');
                     if ($liveMes.length) {
-                        const $liveImg = $liveMes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img').first();
-                        if ($liveImg.length && $liveImg.attr('src') !== mediaAttachment.url) {
-                            $liveImg.attr('src', mediaAttachment.url);
-                        }
+                        $liveMes.find('.mes_media_container img, .img_media').not('.kazuma-lightbox-controls img').each(function() {
+                            if ($(this).attr('src') !== mediaAttachment.url) {
+                                $(this).attr('src', mediaAttachment.url);
+                            }
+                        });
                     }
-                    if (syncAttempts >= 10) clearInterval(syncLoop);
+                    if (syncAttempts >= 20) clearInterval(syncLoop);
                 }, 100);
             }
 
