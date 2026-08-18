@@ -1258,16 +1258,40 @@ function applyWorkflowState(state) {
         window.addEventListener('mouseup', window._kazumaUp, true);
         window.addEventListener('click', window._kazumaClickBlocker, true);
 
+        function getActiveImage($currentMessage) {
+            let $activeImg = null;
+            let minDiff = Infinity;
+            const $container = $currentMessage.find('.mes_media_container, .inline-image-container, .gallery-image').first();
+            if (!$container.length) {
+                return $currentMessage.find('img:visible').not('.kazuma-lightbox-controls img').first();
+            }
+            
+            const containerLeft = $container.offset().left;
+            
+            $container.find('img').not('.kazuma-lightbox-controls img').each(function() {
+                if (!$(this).is(':visible')) return;
+                const imgLeft = $(this).offset().left;
+                const diff = Math.abs(imgLeft - containerLeft);
+                
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    $activeImg = $(this);
+                }
+            });
+            
+            return $activeImg || $container.find('img:visible').not('.kazuma-lightbox-controls img').first();
+        }
+
         function pollForSrcChange(oldSrc, attempts = 0) {
             const $currentMessage = messageId ? $('.mes[mes="' + messageId + '"]') : (sourceImage ? sourceImage.closest('.mes') : null);
             if (!$currentMessage || !$currentMessage.length) return;
             
-            const $liveImg = $currentMessage.find('.mes_media_container img:visible, .inline-image-container img:visible, .gallery-image img:visible').not('.kazuma-lightbox-controls img').first();
+            const $liveImg = getActiveImage($currentMessage);
             
-            if ($liveImg.length && $liveImg.attr('src') !== oldSrc) {
+            if ($liveImg && $liveImg.length && $liveImg.attr('src') !== oldSrc) {
                 sourceImage = $liveImg;
                 updateModalImg();
-            } else if (attempts < 10) {
+            } else if (attempts < 20) {
                 setTimeout(() => pollForSrcChange(oldSrc, attempts + 1), 50);
             }
         }
