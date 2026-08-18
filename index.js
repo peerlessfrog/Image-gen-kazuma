@@ -967,59 +967,52 @@ function applyWorkflowState(state) {
     let sourceImage = null;
     let enhanceInterval = null;
 
-    // Use a CAPTURING listener to intercept the first tap before SillyTavern's handlers
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
-            if ($img.length) {
-                if (window.lastTappedGalleryImage !== $img[0]) {
-                    e.preventDefault();
-                    e.stopPropagation(); // Stops ST from opening the lightbox immediately
-                    window.lastTappedGalleryImage = $img[0];
-                    return false;
-                } else {
-                    // Second tap allows lightbox
-                    window.lastTappedGalleryImage = null;
-                }
-            }
-        }
-    }, true);
-
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024 && !$(e.target).closest('img').length) {
-            window.lastTappedGalleryImage = null;
-        }
-    }, true);
-
-    // Track clicks to enhance the lightbox
-    $(document).on('click', 'img.img_media, .mes_media_container img, .gallery-image', function() {
-        sourceImage = $(this);
-        
+    function startPollingForLightbox() {
         if (enhanceInterval) clearInterval(enhanceInterval);
         let attempts = 0;
         
-        // Poll for the modal to become visible (ST reuses DOM elements)
         enhanceInterval = setInterval(() => {
             attempts++;
-            if (attempts > 20) {
+            if (attempts > 40) { // 2 seconds timeout
                 clearInterval(enhanceInterval);
                 return;
             }
             
-            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible').first();
+            // Check for ST standard modals and Fancybox
+            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
             if ($modal.length) {
-                const $modalImg = $modal.find('img').first();
-                // Ensure it's our image
-                if ($modalImg.length && $modalImg.attr('src') === sourceImage.attr('src')) {
+                const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
+                if ($modalImg.length) {
                     clearInterval(enhanceInterval);
                     enhanceLightbox($modal, $modalImg);
                 }
             }
         }, 50);
-    });
+    }
+
+    document.addEventListener('click', function(e) {
+        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
+        if ($img.length) {
+            if (window.innerWidth <= 1024) {
+                if (window.lastTappedGalleryImage !== $img[0]) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.lastTappedGalleryImage = $img[0];
+                    return false;
+                } else {
+                    window.lastTappedGalleryImage = null;
+                }
+            }
+            // Tap allows lightbox - set source and poll
+            sourceImage = $img;
+            startPollingForLightbox();
+        } else if (window.innerWidth <= 1024) {
+            window.lastTappedGalleryImage = null;
+        }
+    }, true);
 
     function enhanceLightbox($modal, $modalImg) {
-        // Clear previous enhancements
+        if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
         const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
@@ -1039,20 +1032,19 @@ function applyWorkflowState(state) {
                 pointerEvents: 'auto',
                 opacity: 1,
                 visibility: 'visible',
-                width: '100%'
+                width: '100%',
+                background: 'transparent'
             });
             $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
 
-            // Hook up clicks on the cloned menu
             $clonedControls.on('click', '*', function(e) {
-                // Ensure the click doesn't immediately close the modal
                 e.stopPropagation();
                 updateModalImg();
             });
 
-            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content').first();
+            // Target the best container to append to
+            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
             if ($target.length) {
-                // ensure parent is relative so absolute positioning works
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
             } else {
@@ -1064,16 +1056,19 @@ function applyWorkflowState(state) {
         let touchStartX = 0;
         let touchEndX = 0;
         
-        // Remove old handlers to prevent duplicate firing
-        $modal.off('touchstart.kazuma touchend.kazuma');
+        // Find best touch target so we don't block ST's outer dismiss clicks
+        const touchTarget = $modal.find('.fancybox__viewport, .mfp-wrap, .modal-content, #dialogue_popup_text').first();
+        const $touch = touchTarget.length ? touchTarget : $modal;
+
+        $touch.off('touchstart.kazuma touchend.kazuma');
         
-        $modal.on('touchstart.kazuma', function(e) {
+        $touch.on('touchstart.kazuma', function(e) {
             if (e.originalEvent && e.originalEvent.changedTouches) {
                 touchStartX = e.originalEvent.changedTouches[0].screenX;
             }
         });
         
-        $modal.on('touchend.kazuma', function(e) {
+        $touch.on('touchend.kazuma', function(e) {
             if (e.originalEvent && e.originalEvent.changedTouches) {
                 touchEndX = e.originalEvent.changedTouches[0].screenX;
                 const threshold = 50;
@@ -1101,16 +1096,14 @@ function applyWorkflowState(state) {
         function updateModalImg() {
             setTimeout(() => {
                 if (sourceImage && sourceImage.length) {
-                    // Re-query the container to find the *new* current image
                     const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img').first();
                     const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
                     if (newSrc && $modalImg.attr('src') !== newSrc) {
                         $modalImg.attr('src', newSrc);
-                        // Update sourceImage pointer to the newly selected image
                         if ($currentImg.length) sourceImage = $currentImg;
                     }
                 }
-            }, 100); // Small delay to let ST update the inline gallery
+            }, 100);
         }
     }
 })();
