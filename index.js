@@ -485,8 +485,11 @@ async function onGeneratePrompt() {
         else perspInst = "Describe the entire environment and atmosphere.";
 
         const instruction = `
-            Task: Write an image generation prompt for the following scene.
-            Scene: "${sceneText}"
+            Task: Write an image generation prompt that accurately depicts the CURRENT STATE of the characters at the exact moment of the final scene below. 
+            Crucial: Use the chat history and summary above to deduce their current environment, clothing, and physical positioning, but focus the action on the final scene.
+            
+            Final Scene: "${sceneText}"
+            
             Style Constraint: ${styleInst}
             Perspective: ${perspInst}
             Additional Req: ${extra}
