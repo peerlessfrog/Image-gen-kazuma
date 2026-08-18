@@ -485,7 +485,6 @@ async function onGeneratePrompt() {
             }
         }
         // ----------------------------------
-
         const s = extension_settings[extensionName];
 
         const style = s.promptStyle || "standard";
@@ -961,125 +960,140 @@ function applyWorkflowState(state) {
     $("#kazuma_lora_wt_4").val(s.selectedLoraWt4); $("#kazuma_lora_wt_display_4").text(s.selectedLoraWt4);
 }
 
-// --- MOBILE GALLERY FIX ---
-let lastTappedGalleryImage = null;
-$(document).on("click", "img", function(e) {
-    if (window.innerWidth <= 1024) {
-        // Target gallery images
-        if ($(this).closest(".mes_media_container, .gallery-image").length || $(this).hasClass("img_media")) {
-            if (lastTappedGalleryImage !== this) {
-                // First tap: prevent lightbox, allow hover UI to show
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                lastTappedGalleryImage = this;
-                return false;
-            } else {
-                // Second tap: allow click to pass through
-                lastTappedGalleryImage = null;
-            }
-        }
-    }
-});
 
-$(document).on("click", function(e) {
-    if (!$(e.target).is("img")) {
-        lastTappedGalleryImage = null;
-    }
-});
 
-// --- LIGHTBOX SWIPE & CONTROLS ENHANCER ---
+// --- MOBILE GALLERY FIX & LIGHTBOX ENHANCER ---
 (function() {
     let sourceImage = null;
-    
-    // Track the last clicked inline gallery image
-    $(document).on('click', 'img', function() {
-        if ($(this).closest('.mes_text').length) {
-            sourceImage = $(this);
-        }
-    });
+    let enhanceInterval = null;
 
-    // Observe body for modal additions
-    const observer = new MutationObserver((mutations) => {
-        for (const mut of mutations) {
-            for (const node of mut.addedNodes) {
-                if (node.nodeType === 1) {
-                    const $el = $(node);
-                    // Check if it looks like a fullscreen modal/lightbox
-                    if ($el.css('position') === 'fixed' || parseInt($el.css('z-index')) >= 1000 || $el.attr('id') === 'dialogue_popup' || $el.hasClass('mfp-wrap')) {
-                        const $modalImg = $el.find('img').first();
-                        if ($modalImg.length && sourceImage && $modalImg.attr('src') === sourceImage.attr('src')) {
-                            enhanceLightbox($el, $modalImg);
-                        }
-                    }
+    // Use a CAPTURING listener to intercept the first tap before SillyTavern's handlers
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024) {
+            const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
+            if ($img.length) {
+                if (window.lastTappedGalleryImage !== $img[0]) {
+                    e.preventDefault();
+                    e.stopPropagation(); // Stops ST from opening the lightbox immediately
+                    window.lastTappedGalleryImage = $img[0];
+                    return false;
+                } else {
+                    // Second tap allows lightbox
+                    window.lastTappedGalleryImage = null;
                 }
             }
         }
+    }, true);
+
+    document.addEventListener('click', function(e) {
+        if (window.innerWidth <= 1024 && !$(e.target).closest('img').length) {
+            window.lastTappedGalleryImage = null;
+        }
+    }, true);
+
+    // Track clicks to enhance the lightbox
+    $(document).on('click', 'img.img_media, .mes_media_container img, .gallery-image', function() {
+        sourceImage = $(this);
+        
+        if (enhanceInterval) clearInterval(enhanceInterval);
+        let attempts = 0;
+        
+        // Poll for the modal to become visible (ST reuses DOM elements)
+        enhanceInterval = setInterval(() => {
+            attempts++;
+            if (attempts > 20) {
+                clearInterval(enhanceInterval);
+                return;
+            }
+            
+            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible').first();
+            if ($modal.length) {
+                const $modalImg = $modal.find('img').first();
+                // Ensure it's our image
+                if ($modalImg.length && $modalImg.attr('src') === sourceImage.attr('src')) {
+                    clearInterval(enhanceInterval);
+                    enhanceLightbox($modal, $modalImg);
+                }
+            }
+        }, 50);
     });
-    
-    if (document.body) {
-        observer.observe(document.body, { childList: true, subtree: true });
-    } else {
-        $(document).ready(() => observer.observe(document.body, { childList: true, subtree: true }));
-    }
 
     function enhanceLightbox($modal, $modalImg) {
-        // Prevent multiple enhancements
-        if ($modal.find('.kazuma-lightbox-controls').length) return;
+        // Clear previous enhancements
+        $modal.find('.kazuma-lightbox-controls').remove();
 
-        // Find controls from source
         const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
         const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
         
         if ($controls.length) {
             const $clonedControls = $controls.clone(true, true);
             $clonedControls.addClass('kazuma-lightbox-controls');
-            // Force visibility and styling for lightbox
             $clonedControls.css({
                 position: 'absolute',
-                bottom: '40px',
-                left: '0',
-                right: '0',
+                bottom: '30px',
+                left: '50%',
+                transform: 'translateX(-50%)',
                 display: 'flex',
                 justifyContent: 'center',
                 zIndex: 999999,
                 pointerEvents: 'auto',
                 opacity: 1,
-                visibility: 'visible'
+                visibility: 'visible',
+                width: '100%'
             });
-            
-            // Ensure child elements like icons are visible
-            $clonedControls.find('*').css({
-                opacity: 1,
-                visibility: 'visible'
-            });
+            $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
 
-            // Update modal image if a control is clicked (like prev/next/regenerate)
-            $clonedControls.on('click', '*', function() {
+            // Hook up clicks on the cloned menu
+            $clonedControls.on('click', '*', function(e) {
+                // Ensure the click doesn't immediately close the modal
+                e.stopPropagation();
                 updateModalImg();
             });
 
-            $modal.append($clonedControls);
+            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content').first();
+            if ($target.length) {
+                // ensure parent is relative so absolute positioning works
+                if ($target.css('position') === 'static') $target.css('position', 'relative');
+                $target.append($clonedControls);
+            } else {
+                $modal.append($clonedControls);
+            }
         }
 
         // Swipe functionality
         let touchStartX = 0;
         let touchEndX = 0;
-        $modal.on('touchstart', function(e) {
+        
+        // Remove old handlers to prevent duplicate firing
+        $modal.off('touchstart.kazuma touchend.kazuma');
+        
+        $modal.on('touchstart.kazuma', function(e) {
             if (e.originalEvent && e.originalEvent.changedTouches) {
                 touchStartX = e.originalEvent.changedTouches[0].screenX;
             }
         });
-        $modal.on('touchend', function(e) {
+        
+        $modal.on('touchend.kazuma', function(e) {
             if (e.originalEvent && e.originalEvent.changedTouches) {
                 touchEndX = e.originalEvent.changedTouches[0].screenX;
                 const threshold = 50;
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $container.find('.right_menu_button, .right_arrow, .fa-chevron-right').closest('div, button, i');
-                    if ($next.length) { $next.click(); updateModalImg(); }
+                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
+                    if ($next.length) { 
+                        e.preventDefault();
+                        e.stopPropagation();
+                        $next.click(); 
+                        updateModalImg(); 
+                    }
                 }
                 if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $container.find('.left_menu_button, .left_arrow, .fa-chevron-left').closest('div, button, i');
-                    if ($prev.length) { $prev.click(); updateModalImg(); }
+                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
+                    if ($prev.length) { 
+                        e.preventDefault();
+                        e.stopPropagation();
+                        $prev.click(); 
+                        updateModalImg(); 
+                    }
                 }
             }
         });
@@ -1087,9 +1101,16 @@ $(document).on("click", function(e) {
         function updateModalImg() {
             setTimeout(() => {
                 if (sourceImage && sourceImage.length) {
-                    $modalImg.attr('src', sourceImage.attr('src'));
+                    // Re-query the container to find the *new* current image
+                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img').first();
+                    const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
+                    if (newSrc && $modalImg.attr('src') !== newSrc) {
+                        $modalImg.attr('src', newSrc);
+                        // Update sourceImage pointer to the newly selected image
+                        if ($currentImg.length) sourceImage = $currentImg;
+                    }
                 }
-            }, 100);
+            }, 100); // Small delay to let ST update the inline gallery
         }
     }
 })();
