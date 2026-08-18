@@ -1088,11 +1088,14 @@ function applyWorkflowState(state) {
             // Replicate the original Kazuma lightbox control styling exactly
             $clonedHover.css({
                 position: 'absolute', bottom: '30px', left: '50%', transform: 'translateX(-50%)',
-                display: 'flex', justifyContent: 'center', pointerEvents: 'auto',
+                display: 'flex', justifyContent: 'center', alignItems: 'center', pointerEvents: 'auto',
                 opacity: 1, visibility: 'visible', width: '100%', background: 'transparent'
             });
             
             $clonedHover.find('*').css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+            
+            // Add extra space specifically between the native Zoom and Delete buttons
+            $clonedHover.children().css({ margin: '0 15px' });
 
             // Perfect proxy clicks
             $clonedHover.on('click', '[data-kazuma-id]', function(e) {
@@ -1134,12 +1137,22 @@ function applyWorkflowState(state) {
             if (!$currentMessage.length) $currentMessage = sourceImage.closest('.mes');
             if (!$currentMessage.length) return;
 
-            const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
+            const $currentNext = $currentMessage.find('.right_arrow, .gallery_next, .media_next, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .mes_img_swipe_right').not('.kazuma-lightbox-controls *, .hover-menu *, .mes_buttons *, .swipe_left, .swipe_right').closest('div, button, a, span, i').first();
             
+            let isGeneratingNew = false;
+            if ($counter) {
+                const counterText = $counter.text().trim();
+                const match = counterText.match(/(\d+)\s*\/\s*(\d+)/);
+                if (match && match[1] === match[2]) {
+                    isGeneratingNew = true;
+                    if (typeof toastr !== 'undefined') toastr.info("Generating new image...", "Image Gen Kazuma");
+                }
+            }
+
             if ($currentNext.length) { 
                 const oldSrc = sourceImage.attr('src');
                 $currentNext.click(); 
-                pollForSrcChange(oldSrc);
+                if (!isGeneratingNew) pollForSrcChange(oldSrc);
             } else {
                 if (messageId !== undefined && typeof getContext === 'function') {
                     const chat = getContext().chat;
