@@ -553,34 +553,42 @@ async function onGeneratePrompt() {
     }
 }
 
+window.kazumaIsCurrentlyGeneratingImage = false;
+
 async function generateWithComfy(positivePrompt, target = null) {
-    const url = extension_settings[extensionName].comfyUrl;
-    const currentName = extension_settings[extensionName].currentWorkflowName;
-
-    // Load from server
-    let workflowRaw;
+    if (window.kazumaIsCurrentlyGeneratingImage) return;
+    window.kazumaIsCurrentlyGeneratingImage = true;
     try {
-        const res = await fetch('/api/sd/comfy/workflow', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ file_name: currentName }) });
-        if (!res.ok) throw new Error("Load failed");
-        workflowRaw = await res.json();
-    } catch (e) { return toastr.error(`Could not load ${currentName}`); }
+        const url = extension_settings[extensionName].comfyUrl;
+        const currentName = extension_settings[extensionName].currentWorkflowName;
 
-    let workflow = (typeof workflowRaw === 'string') ? JSON.parse(workflowRaw) : workflowRaw;
+        // Load from server
+        let workflowRaw;
+        try {
+            const res = await fetch('/api/sd/comfy/workflow', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ file_name: currentName }) });
+            if (!res.ok) throw new Error("Load failed");
+            workflowRaw = await res.json();
+        } catch (e) { return toastr.error(`Could not load ${currentName}`); }
 
-    let finalSeed = parseInt(extension_settings[extensionName].customSeed);
-    if (finalSeed === -1 || isNaN(finalSeed)) {
-        finalSeed = Math.floor(Math.random() * 1000000000);
+        let workflow = (typeof workflowRaw === 'string') ? JSON.parse(workflowRaw) : workflowRaw;
+
+        let finalSeed = parseInt(extension_settings[extensionName].customSeed);
+        if (finalSeed === -1 || isNaN(finalSeed)) {
+            finalSeed = Math.floor(Math.random() * 1000000000);
+        }
+
+        workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed);
+
+        try {
+            toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
+            const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, front: true }) });
+            if(!res.ok) throw new Error("Failed");
+            const data = await res.json();
+            await waitForGeneration(url, data.prompt_id, positivePrompt, target);
+        } catch(e) { toastr.error("Comfy Error: " + e.message); }
+    } finally {
+        setTimeout(() => { window.kazumaIsCurrentlyGeneratingImage = false; }, 3000);
     }
-
-    workflow = injectParamsIntoWorkflow(workflow, positivePrompt, finalSeed);
-
-    try {
-        toastr.info("Sending to ComfyUI...", "Image Gen Kazuma");
-        const res = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, front: true }) });
-        if(!res.ok) throw new Error("Failed");
-        const data = await res.json();
-        await waitForGeneration(url, data.prompt_id, positivePrompt, target);
-    } catch(e) { toastr.error("Comfy Error: " + e.message); }
 }
 
 function injectParamsIntoWorkflow(workflow, promptText, finalSeed) {
@@ -744,6 +752,17 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
             target.message.extra.media.push(mediaAttachment);
             target.message.extra.media_index = target.message.extra.media.length - 1;
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
+            
+            // Force inline visual sync to bypass ST DOM diffing laziness
+            if (target.element) {
+                const $targetElement = $(target.element);
+                const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
+                if ($mes.length) {
+                    const $liveImg = $mes.find('.mes_media_container img, .img_media').first();
+                    if ($liveImg.length) $liveImg.attr('src', mediaAttachment.url);
+                }
+            }
+
             await saveChat();
             toastr.success("Gallery updated!");
         } else {
