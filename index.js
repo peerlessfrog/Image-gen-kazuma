@@ -810,7 +810,47 @@ jQuery(async () => {
             // 3. Update Pointer
             extension_settings[extensionName].currentWorkflowName = newWorkflow;
             saveSettingsDebounced();
+
+            // CHAT LOCK LOGIC
+            const isLocked = $("#kazuma_lock_preset").prop("checked");
+            if (isLocked) {
+                const { chatMetadata } = SillyTavern.getContext();
+                if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
+                chatMetadata['image-gen-kazuma'].lockedPreset = newWorkflow;
+                saveChat();
+            }
         });
+
+        $("#kazuma_lock_preset").on("change", function() {
+            const isLocked = $(this).prop("checked");
+            const { chatMetadata } = SillyTavern.getContext();
+            if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
+            
+            if (isLocked) {
+                chatMetadata['image-gen-kazuma'].lockedPreset = extension_settings[extensionName].currentWorkflowName;
+            } else {
+                delete chatMetadata['image-gen-kazuma'].lockedPreset;
+            }
+            saveChat();
+        });
+
+        eventSource.on(event_types.CHAT_CHANGED, function() {
+            const { chatMetadata } = SillyTavern.getContext();
+            if (chatMetadata && chatMetadata['image-gen-kazuma'] && chatMetadata['image-gen-kazuma'].lockedPreset) {
+                const lockedPreset = chatMetadata['image-gen-kazuma'].lockedPreset;
+                if (extension_settings[extensionName].savedWorkflowStates && extension_settings[extensionName].savedWorkflowStates[lockedPreset]) {
+                    // Switch to the locked preset if it's not already selected
+                    if ($("#kazuma_workflow_list").val() !== lockedPreset) {
+                        $("#kazuma_workflow_list").val(lockedPreset).trigger('change');
+                    }
+                    $("#kazuma_lock_preset").prop("checked", true);
+                    return;
+                }
+            }
+            // If no lock or preset doesn't exist anymore
+            $("#kazuma_lock_preset").prop("checked", false);
+        });
+
         $("#kazuma_import_btn").on("click", () => $("#kazuma_import_file").click());
 
         // New Logic Events
@@ -1061,38 +1101,40 @@ function applyWorkflowState(state) {
             }
         }
 
-        // --- Swipe functionality (Native Capturing) ---
+        // --- Swipe functionality (Top-Level Native Capturing) ---
         let touchStartX = 0;
         let touchEndX = 0;
         
-        // We bind to the modal container directly
-        const modalEl = $modal[0];
-        
-        if (modalEl._kazumaTouchStart) modalEl.removeEventListener('touchstart', modalEl._kazumaTouchStart, true);
-        if (modalEl._kazumaTouchEnd) modalEl.removeEventListener('touchend', modalEl._kazumaTouchEnd, true);
+        if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
+        if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
 
-        modalEl._kazumaTouchStart = function(e) {
+        window._kazumaTouchStart = function(e) {
+            // Only hijack if touching inside the active modal
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            
             if (e.changedTouches) {
                 touchStartX = e.changedTouches[0].screenX;
             }
         };
 
-        modalEl._kazumaTouchEnd = function(e) {
+        window._kazumaTouchEnd = function(e) {
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            
             if (e.changedTouches) {
                 touchEndX = e.changedTouches[0].screenX;
-                const threshold = 50;
-                const $container = sourceImage.closest('.mes_media_container, .gallery-image').parent();
+                const threshold = 40;
+                const $wrapper = sourceImage.parent();
                 
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
+                    const $next = $wrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
                     if ($next.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $next.click(); 
                         updateModalImg(); 
                     }
                 }
-                if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
+                else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    const $prev = $wrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
                     if ($prev.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $prev.click(); 
@@ -1102,8 +1144,8 @@ function applyWorkflowState(state) {
             }
         };
 
-        modalEl.addEventListener('touchstart', modalEl._kazumaTouchStart, true);
-        modalEl.addEventListener('touchend', modalEl._kazumaTouchEnd, true);
+        window.addEventListener('touchstart', window._kazumaTouchStart, true);
+        window.addEventListener('touchend', window._kazumaTouchEnd, true);
 
         function updateModalImg() {
             setTimeout(() => {
