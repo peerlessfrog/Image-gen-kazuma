@@ -1065,8 +1065,7 @@ function applyWorkflowState(state) {
         const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
         $clonedControls.css({
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-            pointerEvents: 'none', zIndex: 2147483647, display: 'block',
-            opacity: 0, transition: 'opacity 0.2s ease-in-out'
+            pointerEvents: 'none', zIndex: 2147483647, display: 'block'
         });
 
         // 1. Map and Clone the Hover Menu (Refresh, Delete, etc.)
