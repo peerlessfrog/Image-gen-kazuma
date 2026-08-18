@@ -751,14 +751,22 @@ async function insertImageToChat(imgUrl, promptText, target = null) {
             target.message.extra.media_display = "gallery";
             target.message.extra.media.push(mediaAttachment);
             target.message.extra.media_index = target.message.extra.media.length - 1;
-            if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             
-            // Force inline visual sync to bypass ST DOM diffing laziness
+            // Capture the live message ID before ST potentially tears down the DOM node
+            let mesId = null;
             if (target.element) {
                 const $targetElement = $(target.element);
                 const $mes = $targetElement.hasClass('mes') ? $targetElement : $targetElement.closest('.mes');
-                if ($mes.length) {
-                    const $liveImg = $mes.find('.mes_media_container img, .img_media').first();
+                if ($mes.length) mesId = $mes.attr('mes');
+            }
+
+            if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
+            
+            // Force inline visual sync to bypass ST DOM diffing laziness using the live node
+            if (mesId) {
+                const $liveMes = $('.mes[mes="' + mesId + '"]');
+                if ($liveMes.length) {
+                    const $liveImg = $liveMes.find('.mes_media_container img, .img_media').first();
                     if ($liveImg.length) $liveImg.attr('src', mediaAttachment.url);
                 }
             }
