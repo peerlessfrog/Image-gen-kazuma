@@ -1075,10 +1075,17 @@ function applyWorkflowState(state) {
             
             $clonedControls.css({
                 position: 'absolute',
-                top: 0, left: 0, right: 0, bottom: 0,
-                pointerEvents: 'none',
-                zIndex: 2147483647,
-                display: 'block'
+                bottom: '30px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                justifyContent: 'center',
+                zIndex: 999999,
+                pointerEvents: 'auto',
+                opacity: 1,
+                visibility: 'visible',
+                width: '100%',
+                gap: '10px'
             });
             
             // Force buttons to be visible and clickable
@@ -1102,7 +1109,7 @@ function applyWorkflowState(state) {
             });
 
             // Target the best container to append to
-            const $target = $modal.find('.popup-body, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+            const $target = $modal.find('.img_enlarged_holder, .img_enlarged_container, .popup-body, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
             if ($target.length) {
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
@@ -1110,6 +1117,11 @@ function applyWorkflowState(state) {
                 if ($modal.css('position') === 'static') $modal.css('position', 'relative');
                 $modal.append($clonedControls);
             }
+        }
+
+        // Prevent browser drag-and-drop behavior on the image so swiping works smoothly
+        if ($modalImg && $modalImg.length) {
+            $modalImg.attr('draggable', 'false');
         }
 
         // --- Swipe functionality (Top-Level Native Capturing) ---
