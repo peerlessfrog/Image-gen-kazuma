@@ -1026,7 +1026,7 @@ function applyWorkflowState(state) {
             }
             
             // Check for ST standard modals and Fancybox
-            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
+            const $modal = $('#dialogue_popup:visible, dialog.popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
             if ($modal.length) {
                 const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
                 if ($modalImg.length) {
