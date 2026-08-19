@@ -1062,12 +1062,16 @@ function applyWorkflowState(state) {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
+        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$wrapper.length) $wrapper = sourceImage.parent();
         
-        if ($controls.length) {
-            const $clonedControls = $controls.clone(true, true);
-            $clonedControls.addClass('kazuma-lightbox-controls');
+        const $sourceElements = $wrapper.children().not('img, picture, video, a');
+        const $externalControls = $wrapper.parent().find('.left_menu_button, .right_menu_button, .left_arrow, .right_arrow').not($wrapper.find('*'));
+        
+        if ($sourceElements.length || $externalControls.length) {
+            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+            $clonedControls.append($sourceElements.clone(true, true));
+            $clonedControls.append($externalControls.clone(true, true));
             
             $clonedControls.css({
                 position: 'absolute',
@@ -1098,7 +1102,7 @@ function applyWorkflowState(state) {
             });
 
             // Target the best container to append to
-            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+            const $target = $modal.find('.popup-body, .img_enlarged_container, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
             if ($target.length) {
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
