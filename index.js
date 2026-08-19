@@ -1910,35 +1910,27 @@ async function importLorasFromWorkflow() {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-        if (!$wrapper.length) $wrapper = sourceImage.parent();
+        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
         
-        const $sourceElements = $wrapper.children().not('img, picture, video, a');
-        
-        if ($sourceElements.length) {
-            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-            $clonedControls.append($sourceElements.clone(true, true));
-            
+        if ($controls.length) {
+            const $clonedControls = $controls.clone(true, true);
+            $clonedControls.addClass('kazuma-lightbox-controls');
             $clonedControls.css({
                 position: 'absolute',
-                top: 0, left: 0, right: 0, bottom: 0,
-                pointerEvents: 'none',
-                zIndex: 2147483647,
-                display: 'block'
+                bottom: '30px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                justifyContent: 'center',
+                zIndex: 999999,
+                pointerEvents: 'auto',
+                opacity: 1,
+                visibility: 'visible',
+                width: '100%',
+                background: 'transparent'
             });
-            
-            // Force buttons to be visible and clickable
-            $clonedControls.find('*').css({
-                opacity: 1, 
-                visibility: 'visible', 
-                pointerEvents: 'auto'
-            });
-            // Try to force display block on direct children if they are hidden
-            $clonedControls.children().each(function() {
-                if ($(this).css('display') === 'none') {
-                    $(this).css('display', 'flex');
-                }
-            });
+            $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
 
             $clonedControls.on('click', '*', function(e) {
                 // We rely on the cloned event handler to actually do the work
@@ -1980,11 +1972,10 @@ async function importLorasFromWorkflow() {
             if (e.changedTouches) {
                 touchEndX = e.changedTouches[0].screenX;
                 const threshold = 40;
-                let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
-                if (!$wrapper.length) $wrapper = sourceImage.parent();
+                const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
                 
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $wrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
+                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').closest('div, button, i, span, a');
                     if ($next.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $next.click(); 
@@ -1992,7 +1983,7 @@ async function importLorasFromWorkflow() {
                     }
                 }
                 else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $wrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
+                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').closest('div, button, i, span, a');
                     if ($prev.length) { 
                         e.preventDefault(); e.stopPropagation();
                         $prev.click(); 
