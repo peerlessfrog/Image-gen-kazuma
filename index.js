@@ -1066,47 +1066,74 @@ function applyWorkflowState(state) {
         if (!$wrapper.length) $wrapper = sourceImage.parent();
         
         const $sourceElements = $wrapper.children().not('img, picture, video, a');
-        const $externalControls = $wrapper.parent().find('.left_menu_button, .right_menu_button, .left_arrow, .right_arrow').not($wrapper.find('*'));
+        const $swipeContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
         
-        if ($sourceElements.length || $externalControls.length) {
+        const $origLeft = $swipeContainer.find('.left_menu_button, .left_arrow, i.fa-chevron-left, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').closest('div, button, a, span').first();
+        const $origRight = $swipeContainer.find('.right_menu_button, .right_arrow, i.fa-chevron-right, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').closest('div, button, a, span').first();
+        
+        if ($sourceElements.length || $origLeft.length || $origRight.length) {
             const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
-            $clonedControls.append($sourceElements.clone(true, true));
-            $clonedControls.append($externalControls.clone(true, true));
             
             $clonedControls.css({
                 position: 'absolute',
-                bottom: '30px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex',
-                justifyContent: 'center',
-                zIndex: 999999,
-                pointerEvents: 'auto',
-                opacity: 1,
-                visibility: 'visible',
+                bottom: '45px', // More padding to shift up
+                left: '0',
                 width: '100%',
-                gap: '10px'
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '0 20px',
+                boxSizing: 'border-box',
+                zIndex: 999999,
+                pointerEvents: 'none' // Let clicks pass through empty space
             });
             
-            // Force buttons to be visible and clickable
-            $clonedControls.find('*').css({
-                opacity: 1, 
-                visibility: 'visible', 
-                pointerEvents: 'auto'
+            // 1. Left Arrow (Proxy clicks)
+            const $leftContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
+            if ($origLeft.length) {
+                const $cloneLeft = $origLeft.clone(false, false);
+                $cloneLeft.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
+                $cloneLeft.on('click', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    $origLeft.click();
+                    updateModalImg();
+                });
+                $leftContainer.append($cloneLeft);
+            }
+            $clonedControls.append($leftContainer);
+            
+            // 2. Center Icons (Zoom/Trash)
+            const $centerContainer = $('<div></div>').css({ 
+                display: 'flex', 
+                gap: '15px', 
+                pointerEvents: 'auto',
+                justifyContent: 'center',
+                alignItems: 'center'
             });
-            // Try to force display block on direct children if they are hidden
-            $clonedControls.children().each(function() {
-                if ($(this).css('display') === 'none') {
-                    $(this).css('display', 'flex');
-                }
-            });
-
-            $clonedControls.on('click', '*', function(e) {
-                // We rely on the cloned event handler to actually do the work
-                // But we must update the modal image afterwards
-                e.stopPropagation();
-                updateModalImg();
-            });
+            if ($sourceElements.length) {
+                // Filter out arrows from center elements if they were grabbed
+                let $centerIcons = $sourceElements.clone(true, true);
+                $centerIcons = $centerIcons.not('.left_menu_button, .right_menu_button, .left_arrow, .right_arrow, .fa-chevron-left, .fa-chevron-right');
+                
+                $centerIcons.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
+                $centerIcons.each(function() { if ($(this).css('display') === 'none') $(this).css('display', 'flex'); });
+                $centerContainer.append($centerIcons);
+            }
+            $clonedControls.append($centerContainer);
+            
+            // 3. Right Arrow (Proxy clicks)
+            const $rightContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
+            if ($origRight.length) {
+                const $cloneRight = $origRight.clone(false, false);
+                $cloneRight.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
+                $cloneRight.on('click', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    $origRight.click();
+                    updateModalImg();
+                });
+                $rightContainer.append($cloneRight);
+            }
+            $clonedControls.append($rightContainer);
 
             // Target the best container to append to
             const $target = $modal.find('.img_enlarged_holder, .img_enlarged_container, .popup-body, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
