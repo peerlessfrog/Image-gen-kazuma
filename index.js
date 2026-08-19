@@ -1088,14 +1088,13 @@ function applyWorkflowState(state) {
                 pointerEvents: 'none' // Let clicks pass through empty space
             });
             
-            // 1. Left Arrow (Proxy clicks)
+            // 1. Left Arrow (Use original clone(true, true) logic)
             const $leftContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
             if ($origLeft.length) {
-                const $cloneLeft = $origLeft.clone(false, false);
+                const $cloneLeft = $origLeft.clone(true, true);
                 $cloneLeft.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
                 $cloneLeft.on('click', function(e) {
-                    e.preventDefault(); e.stopPropagation();
-                    $origLeft.click();
+                    e.stopPropagation();
                     updateModalImg();
                 });
                 $leftContainer.append($cloneLeft);
@@ -1117,18 +1116,21 @@ function applyWorkflowState(state) {
                 
                 $centerIcons.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
                 $centerIcons.each(function() { if ($(this).css('display') === 'none') $(this).css('display', 'flex'); });
+                $centerIcons.on('click', function(e) {
+                    e.stopPropagation();
+                    updateModalImg();
+                });
                 $centerContainer.append($centerIcons);
             }
             $clonedControls.append($centerContainer);
             
-            // 3. Right Arrow (Proxy clicks)
+            // 3. Right Arrow (Use original clone(true, true) logic)
             const $rightContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
             if ($origRight.length) {
-                const $cloneRight = $origRight.clone(false, false);
+                const $cloneRight = $origRight.clone(true, true);
                 $cloneRight.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
                 $cloneRight.on('click', function(e) {
-                    e.preventDefault(); e.stopPropagation();
-                    $origRight.click();
+                    e.stopPropagation();
                     updateModalImg();
                 });
                 $rightContainer.append($cloneRight);
