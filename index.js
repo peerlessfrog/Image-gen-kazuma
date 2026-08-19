@@ -845,6 +845,7 @@ async function onGeneratePrompt() {
 
     const strategy = extension_settings[extensionName].profileStrategy || "current";
     const requestProfile = extension_settings[extensionName].connectionProfile;
+    const s = extension_settings[extensionName];
     // If a specific profile is chosen and the Connection Manager extension is active, we fire the
     // request directly at that profile via ConnectionManagerRequestService. This never touches your
     // actively selected connection profile or preset, so it can't be affected by (and can't trigger)
