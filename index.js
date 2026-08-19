@@ -1868,7 +1868,7 @@ async function importLorasFromWorkflow() {
         
         enhanceInterval = setInterval(() => {
             attempts++;
-            if (attempts > 60) { // 3 seconds timeout
+            if (attempts > 40) { // 2 seconds timeout
                 clearInterval(enhanceInterval);
                 return;
             }
@@ -1886,8 +1886,8 @@ async function importLorasFromWorkflow() {
     }
 
     document.addEventListener('click', function(e) {
-        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image, img');
-        if ($img.length && $img.closest('.mes_text, .mes_media_container').length) {
+        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
+        if ($img.length) {
             if (window.innerWidth <= 1024) {
                 if (window.lastTappedGalleryImage !== $img[0]) {
                     e.preventDefault();
@@ -1933,8 +1933,6 @@ async function importLorasFromWorkflow() {
             $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
 
             $clonedControls.on('click', '*', function(e) {
-                // We rely on the cloned event handler to actually do the work
-                // But we must update the modal image afterwards
                 e.stopPropagation();
                 updateModalImg();
             });
@@ -1945,56 +1943,50 @@ async function importLorasFromWorkflow() {
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
             } else {
-                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
                 $modal.append($clonedControls);
             }
         }
 
-        // --- Swipe functionality (Top-Level Native Capturing) ---
+        // Swipe functionality
         let touchStartX = 0;
         let touchEndX = 0;
         
-        if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
-        if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
+        // Find best touch target so we don't block ST's outer dismiss clicks
+        const touchTarget = $modal.find('.fancybox__viewport, .mfp-wrap, .modal-content, #dialogue_popup_text').first();
+        const $touch = touchTarget.length ? touchTarget : $modal;
 
-        window._kazumaTouchStart = function(e) {
-            // Only hijack if touching inside the active modal
-            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            
-            if (e.changedTouches) {
-                touchStartX = e.changedTouches[0].screenX;
+        $touch.off('touchstart.kazuma touchend.kazuma');
+        
+        $touch.on('touchstart.kazuma', function(e) {
+            if (e.originalEvent && e.originalEvent.changedTouches) {
+                touchStartX = e.originalEvent.changedTouches[0].screenX;
             }
-        };
-
-        window._kazumaTouchEnd = function(e) {
-            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
-            
-            if (e.changedTouches) {
-                touchEndX = e.changedTouches[0].screenX;
-                const threshold = 40;
-                const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-                
+        });
+        
+        $touch.on('touchend.kazuma', function(e) {
+            if (e.originalEvent && e.originalEvent.changedTouches) {
+                touchEndX = e.originalEvent.changedTouches[0].screenX;
+                const threshold = 50;
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').closest('div, button, i, span, a');
+                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
                     if ($next.length) { 
-                        e.preventDefault(); e.stopPropagation();
+                        e.preventDefault();
+                        e.stopPropagation();
                         $next.click(); 
                         updateModalImg(); 
                     }
                 }
-                else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').closest('div, button, i, span, a');
+                if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
                     if ($prev.length) { 
-                        e.preventDefault(); e.stopPropagation();
+                        e.preventDefault();
+                        e.stopPropagation();
                         $prev.click(); 
                         updateModalImg(); 
                     }
                 }
             }
-        };
-
-        window.addEventListener('touchstart', window._kazumaTouchStart, true);
-        window.addEventListener('touchend', window._kazumaTouchEnd, true);
+        });
 
         function updateModalImg() {
             setTimeout(() => {
