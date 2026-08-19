@@ -1936,7 +1936,7 @@ async function importLorasFromWorkflow() {
         if (!$wrapper.length) $wrapper = sourceImage.parent();
         
         // This is what gets the overlay TEXT and the hover-menu buttons
-        const $sourceElements = $wrapper.children().not('img, picture, video, a');
+        const $sourceElements = $wrapper.children().not('img, picture, video, a, .swiper-slide, .slick-slide, .gallery-image');
         const $swipeContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
         
         const $origLeft = $swipeContainer.find('.left_menu_button, .left_arrow, i.fa-chevron-left, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').closest('div, button, a, span').first();
@@ -1984,6 +1984,9 @@ async function importLorasFromWorkflow() {
                 // Filter out arrows from center elements if they were grabbed
                 let $centerIcons = $sourceElements.clone(true, true);
                 $centerIcons = $centerIcons.not('.left_menu_button, .right_menu_button, .left_arrow, .right_arrow, .fa-chevron-left, .fa-chevron-right');
+                
+                // Aggressively strip any nested images that sneaked into the cloned container (e.g. from slideshow wrappers)
+                $centerIcons.find('img, picture, video').remove();
                 
                 $centerIcons.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto' });
                 $centerIcons.each(function() { if ($(this).css('display') === 'none') $(this).css('display', 'flex'); });
