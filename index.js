@@ -386,7 +386,7 @@ async function editImageGenPreset(presetName = null) {
     <input type="number" class="text_pole kazuma_preset_msg_count" value="${preset.includeLastMessages}" min="0" max="50" style="width:100px;">
     </div>
     <div>
-    <label><b>System Prompt (placeholders: <code>{{char_name}}</code>, <code>{{char_description}}</code>, <code>{{char_personality}}</code>, <code>{{char_scenario}}</code>, <code>{{group_info}}</code>, <code>{{summaryception}}</code>, <code>{{perspective}}</code>, <code>{{prompt_style}}</code>, <code>{{scene}}</code>, <code>{{prompt_extra}}</code>):</b></label>
+    <label><b>System Prompt (placeholders: <code>{{char_name}}</code>, <code>{{char_description}}</code>, <code>{{char_personality}}</code>, <code>{{char_scenario}}</code>, <code>{{group_info}}</code>, <code>{{summaryception}}</code>, <code>{{perspective}}</code>, <code>{{prompt_style}}</code>, <code>{{tracker}}</code>, <code>{{scene}}</code>, <code>{{prompt_extra}}</code>):</b></label>
     <textarea class="text_pole kazuma_preset_system" rows="8" style="width:100%;font-family:monospace;font-size:12px;">${preset.systemPrompt || ''}</textarea>
     <div class="menu_button kazuma_preset_reset_system" style="margin-top:4px;">Restore built-in default</div>
     </div>
@@ -502,12 +502,17 @@ function buildSystemPromptFromPreset() {
             break;
         }
     }
-    const sceneText = `${tracker}${lastMessage}`;
+    
+    // If the user explicitly placed {{tracker}} in their template, don't bundle it into {{scene}}.
+    // This preserves backwards compatibility for users whose templates only use {{scene}}.
+    const explicitTracker = systemPrompt.includes("{{tracker}}");
+    const sceneText = explicitTracker ? lastMessage : `${tracker}${lastMessage}`;
 
     systemPrompt = systemPrompt
         .replace(/\{\{perspective\}\}/gi, perspInst)
         .replace(/\{\{prompt_style\}\}/gi, styleInst)
         .replace(/\{\{scene\}\}/gi, sceneText)
+        .replace(/\{\{tracker\}\}/gi, tracker)
         .replace(/\{\{prompt_extra\}\}/gi, extra);
 
     // Resolve real ST macros ({{char}}, {{user}}, ...) after the extension's own placeholders above.
