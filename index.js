@@ -1856,3 +1856,166 @@ async function importLorasFromWorkflow() {
         return [];
     }
 }
+
+
+(function() {
+    let sourceImage = null;
+    let enhanceInterval = null;
+
+    function startPollingForLightbox() {
+        if (enhanceInterval) clearInterval(enhanceInterval);
+        let attempts = 0;
+        
+        enhanceInterval = setInterval(() => {
+            attempts++;
+            if (attempts > 60) { // 3 seconds timeout
+                clearInterval(enhanceInterval);
+                return;
+            }
+            
+            // Check for ST standard modals and Fancybox
+            const $modal = $('#dialogue_popup:visible, .mfp-wrap:visible, #image_zoom_modal:visible, #zoom_window:visible, .fancybox__container:visible').first();
+            if ($modal.length) {
+                const $modalImg = $modal.find('img').not('.kazuma-lightbox-controls img').first();
+                if ($modalImg.length) {
+                    clearInterval(enhanceInterval);
+                    enhanceLightbox($modal, $modalImg);
+                }
+            }
+        }, 50);
+    }
+
+    document.addEventListener('click', function(e) {
+        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image, img');
+        if ($img.length && $img.closest('.mes_text, .mes_media_container').length) {
+            if (window.innerWidth <= 1024) {
+                if (window.lastTappedGalleryImage !== $img[0]) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.lastTappedGalleryImage = $img[0];
+                    return false;
+                } else {
+                    window.lastTappedGalleryImage = null;
+                }
+            }
+            // Tap allows lightbox - set source and poll
+            sourceImage = $img;
+            startPollingForLightbox();
+        } else if (window.innerWidth <= 1024) {
+            window.lastTappedGalleryImage = null;
+        }
+    }, true);
+
+    function enhanceLightbox($modal, $modalImg) {
+        if (!sourceImage) return;
+        $modal.find('.kazuma-lightbox-controls').remove();
+
+        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$wrapper.length) $wrapper = sourceImage.parent();
+        
+        const $sourceElements = $wrapper.children().not('img, picture, video, a');
+        
+        if ($sourceElements.length) {
+            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+            $clonedControls.append($sourceElements.clone(true, true));
+            
+            $clonedControls.css({
+                position: 'absolute',
+                top: 0, left: 0, right: 0, bottom: 0,
+                pointerEvents: 'none',
+                zIndex: 2147483647,
+                display: 'block'
+            });
+            
+            // Force buttons to be visible and clickable
+            $clonedControls.find('*').css({
+                opacity: 1, 
+                visibility: 'visible', 
+                pointerEvents: 'auto'
+            });
+            // Try to force display block on direct children if they are hidden
+            $clonedControls.children().each(function() {
+                if ($(this).css('display') === 'none') {
+                    $(this).css('display', 'flex');
+                }
+            });
+
+            $clonedControls.on('click', '*', function(e) {
+                // We rely on the cloned event handler to actually do the work
+                // But we must update the modal image afterwards
+                e.stopPropagation();
+                updateModalImg();
+            });
+
+            // Target the best container to append to
+            const $target = $modal.find('#dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
+            if ($target.length) {
+                if ($target.css('position') === 'static') $target.css('position', 'relative');
+                $target.append($clonedControls);
+            } else {
+                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
+                $modal.append($clonedControls);
+            }
+        }
+
+        // --- Swipe functionality (Top-Level Native Capturing) ---
+        let touchStartX = 0;
+        let touchEndX = 0;
+        
+        if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
+        if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
+
+        window._kazumaTouchStart = function(e) {
+            // Only hijack if touching inside the active modal
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            
+            if (e.changedTouches) {
+                touchStartX = e.changedTouches[0].screenX;
+            }
+        };
+
+        window._kazumaTouchEnd = function(e) {
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            
+            if (e.changedTouches) {
+                touchEndX = e.changedTouches[0].screenX;
+                const threshold = 40;
+                let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+                if (!$wrapper.length) $wrapper = sourceImage.parent();
+                
+                if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
+                    const $next = $wrapper.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
+                    if ($next.length) { 
+                        e.preventDefault(); e.stopPropagation();
+                        $next.click(); 
+                        updateModalImg(); 
+                    }
+                }
+                else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    const $prev = $wrapper.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
+                    if ($prev.length) { 
+                        e.preventDefault(); e.stopPropagation();
+                        $prev.click(); 
+                        updateModalImg(); 
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('touchstart', window._kazumaTouchStart, true);
+        window.addEventListener('touchend', window._kazumaTouchEnd, true);
+
+        function updateModalImg() {
+            setTimeout(() => {
+                if (sourceImage && sourceImage.length) {
+                    const $currentImg = sourceImage.closest('.mes_media_container, .inline-image-container').find('img').first();
+                    const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
+                    if (newSrc && $modalImg.attr('src') !== newSrc) {
+                        $modalImg.attr('src', newSrc);
+                        if ($currentImg.length) sourceImage = $currentImg;
+                    }
+                }
+            }, 100);
+        }
+    }
+})();
