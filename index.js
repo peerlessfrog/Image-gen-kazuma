@@ -93,7 +93,25 @@ const defaultWorkflowData = {
     "35": { "inputs": { "lora_name": "lora", "strength_model": "lorawt", "strength_clip": "lorawt", "model": ["4", 0], "clip": ["4", 1] }, "class_type": "LoraLoader" }
 };
 
-const DEFAULT_SYSTEM_PROMPT = "You are an AI assistant specialized in generating image generation prompts based on conversation context.\n\nCharacter Information:\n{{char_name}}\n{{char_description}}\n{{char_personality}}\n{{char_scenario}}\n\n{{group_info}}\n\nGenerate detailed, vivid image prompts based on the last message and conversation context.";
+const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant specialized in generating image generation prompts based on conversation context.
+
+Character Information:
+{{char_name}}
+{{char_description}}
+{{char_personality}}
+{{char_scenario}}
+
+{{group_info}}
+
+{{summaryception}}
+
+Task: Write an image generation prompt for the following scene.
+The character is {{char}}; the user/persona is {{user}}.
+Scene: "{{scene}}"
+Style Constraint: {{prompt_style}}
+Perspective: {{perspective}}
+Additional Req: {{prompt_extra}}
+Output ONLY the prompt text.`;
 
 const defaultSettings = {
     enabled: true,
@@ -142,6 +160,9 @@ const defaultSettings = {
 function migrateCustomSystemPrompts() {
     const presets = extension_settings[extensionName].imageGenPresets || {};
     let migrated = false;
+    
+    const INSTRUCTION_SNIPPET = `\n\nTask: Write an image generation prompt for the following scene.\nThe character is {{char}}; the user/persona is {{user}}.\nScene: "{{scene}}"\nStyle Constraint: {{prompt_style}}\nPerspective: {{perspective}}\nAdditional Req: {{prompt_extra}}\nOutput ONLY the prompt text.`;
+
     for (const preset of Object.values(presets)) {
         if (preset.customSystemPrompt?.trim()) {
             preset.systemPrompt = preset.customSystemPrompt;
@@ -150,7 +171,21 @@ function migrateCustomSystemPrompts() {
             delete preset.customSystemPrompt;
             migrated = true;
         }
+        
+        // Migrate old presets that relied on the hardcoded instruction concatenation
+        if (preset.systemPrompt && !preset.systemPrompt.includes("Output ONLY the prompt text.")) {
+            preset.systemPrompt += INSTRUCTION_SNIPPET;
+            migrated = true;
+        }
     }
+    
+    // Also upgrade the default preset if it's strictly the old string
+    const OLD_DEFAULT = "You are an AI assistant specialized in generating image generation prompts based on conversation context.\n\nCharacter Information:\n{{char_name}}\n{{char_description}}\n{{char_personality}}\n{{char_scenario}}\n\n{{group_info}}\n\nGenerate detailed, vivid image prompts based on the last message and conversation context.";
+    if (presets["Default"] && presets["Default"].systemPrompt === (OLD_DEFAULT + INSTRUCTION_SNIPPET)) {
+        presets["Default"].systemPrompt = DEFAULT_SYSTEM_PROMPT; // Replace with the cleaner new template
+        migrated = true;
+    }
+    
     if (migrated) saveSettingsDebounced();
 }
 
@@ -351,7 +386,7 @@ async function editImageGenPreset(presetName = null) {
     <input type="number" class="text_pole kazuma_preset_msg_count" value="${preset.includeLastMessages}" min="0" max="50" style="width:100px;">
     </div>
     <div>
-    <label><b>System Prompt (placeholders: <code>{{char_name}}</code>, <code>{{char_description}}</code>, <code>{{char_personality}}</code>, <code>{{char_scenario}}</code>, <code>{{group_info}}</code>):</b></label>
+    <label><b>System Prompt (placeholders: <code>{{char_name}}</code>, <code>{{char_description}}</code>, <code>{{char_personality}}</code>, <code>{{char_scenario}}</code>, <code>{{group_info}}</code>, <code>{{summaryception}}</code>, <code>{{perspective}}</code>, <code>{{prompt_style}}</code>, <code>{{scene}}</code>, <code>{{prompt_extra}}</code>):</b></label>
     <textarea class="text_pole kazuma_preset_system" rows="8" style="width:100%;font-family:monospace;font-size:12px;">${preset.systemPrompt || ''}</textarea>
     <div class="menu_button kazuma_preset_reset_system" style="margin-top:4px;">Restore built-in default</div>
     </div>
@@ -434,7 +469,8 @@ function buildSystemPromptFromPreset() {
     .replace(/\{\{char_name\}\}/g, char?.name || '')
     .replace(/\{\{char_description\}\}/g, char?.description || '')
     .replace(/\{\{char_personality\}\}/g, char?.personality || '')
-    .replace(/\{\{char_scenario\}\}/g, char?.scenario || '');
+    .replace(/\{\{char_scenario\}\}/g, char?.scenario || '')
+    .replace(/\{\{summaryception\}\}/gi, getSummaryceptionText());
 
     let groupInfo = '';
     if (preset.includeCharInfo && context.groupId) {
@@ -443,8 +479,64 @@ function buildSystemPromptFromPreset() {
     }
     systemPrompt = systemPrompt.replace(/\{\{group_info\}\}/g, groupInfo);
 
+    const s = extension_settings[extensionName];
+    const style = s.promptStyle || "standard";
+    const persp = s.promptPerspective || "scene";
+    const extra = s.promptExtra || "";
+
+    let styleInst = "", perspInst = "";
+    if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
+    else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
+    else if (style === "krea2") styleInst = KREA2_INSTRUCTION;
+    else styleInst = "Use a list of detailed keywords/descriptors.";
+
+    if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
+    else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
+    else perspInst = "Describe the entire environment and atmosphere.";
+
+    const tracker = s.includeTracker ? getLatestTracker(context.chat) : "";
+    let lastMessage = "";
+    for (let i = context.chat.length - 1; i >= 0; i--) {
+        if (context.chat[i].mes && context.chat[i].mes.trim() !== "") {
+            lastMessage = context.chat[i].mes;
+            break;
+        }
+    }
+    const sceneText = `${tracker}${lastMessage}`;
+
+    systemPrompt = systemPrompt
+        .replace(/\{\{perspective\}\}/gi, perspInst)
+        .replace(/\{\{prompt_style\}\}/gi, styleInst)
+        .replace(/\{\{scene\}\}/gi, sceneText)
+        .replace(/\{\{prompt_extra\}\}/gi, extra);
+
     // Resolve real ST macros ({{char}}, {{user}}, ...) after the extension's own placeholders above.
     return substituteParams(systemPrompt);
+}
+
+function getSummaryceptionText() {
+    const context = getContext();
+    if (!context || !context.chatMetadata || !context.chatMetadata['summaryception']) return "";
+    
+    const store = context.chatMetadata['summaryception'];
+    if (!store.layers || store.layers.length === 0) return "";
+
+    const snippets = [];
+    for (let i = store.layers.length - 1; i >= 1; i--) {
+        const layer = store.layers[i];
+        if (!layer || layer.length === 0) continue;
+        for (const sn of layer) {
+            if (sn && sn.text) snippets.push(sn.text);
+        }
+    }
+
+    if (store.layers[0] && store.layers[0].length > 0) {
+        for (const sn of store.layers[0]) {
+            if (sn && sn.text) snippets.push(sn.text);
+        }
+    }
+
+    return snippets.join(' ');
 }
 
 function buildChatHistoryFromPreset() {
@@ -762,57 +854,26 @@ async function onGeneratePrompt() {
 
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
-        let lastMessage = "";
-        for (let i = context.chat.length - 1; i >= 0; i--) {
-            if (context.chat[i].mes && context.chat[i].mes.trim() !== "") {
-                lastMessage = context.chat[i].mes;
-                break;
-            }
-        }
-        const s = extension_settings[extensionName];
-        const tracker = s.includeTracker ? getLatestTracker(context.chat) : "";
 
-        const style = s.promptStyle || "standard";
-        const persp = s.promptPerspective || "scene";
-        const extra = s.promptExtra ? `, ${s.promptExtra}` : "";
-
-        let styleInst = "", perspInst = "";
-        if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
-        else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
-        else if (style === "krea2") styleInst = KREA2_INSTRUCTION;
-        else styleInst = "Use a list of detailed keywords/descriptors.";
-
-        if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
-        else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
-        else perspInst = "Describe the entire environment and atmosphere.";
-
-        const instruction = substituteParams(`
-        Task: Write an image generation prompt for the following scene.
-        The character is {{char}}; the user/persona is {{user}}.
-        Scene: "${tracker}${lastMessage}"
-        Style Constraint: ${styleInst}
-        Perspective: ${perspInst}
-        Additional Req: ${extra}
-        Output ONLY the prompt text.
-        `);
+        const instruction = buildSystemPromptFromPreset();
 
         let generatedText;
         if (useOwnProfile) {
             // Build messages using image gen context preset
             const messages = [];
 
-            // Add system prompt from preset
-            const systemPrompt = buildSystemPromptFromPreset();
-            if (systemPrompt && systemPrompt.trim()) {
-                messages.push({ role: "system", content: systemPrompt });
+            // Add the instruction as a system prompt
+            if (instruction && instruction.trim()) {
+                messages.push({ role: "system", content: instruction });
             }
 
             // Add chat history based on preset
             const chatHistory = buildChatHistoryFromPreset();
             messages.push(...chatHistory);
-
-            // Add the generation instruction as final user message
-            messages.push({ role: "user", content: instruction });
+            
+            // To ensure generation executes properly, append a small trigger message 
+            // since the core instruction is now fully encapsulated in the System Prompt
+            messages.push({ role: "user", content: "Generate the image prompt for the current scene." });
 
             const result = await context.ConnectionManagerRequestService.sendRequest(requestProfile, messages);
             generatedText = (typeof result === "string") ? result : (result?.content ?? "");
@@ -915,14 +976,11 @@ function injectParamsIntoWorkflow(workflow, promptText, finalSeed) {
                 if (val === "*denoise*") obj[key] = parseFloat(s.denoise) || 1.0;
                 if (val === "*clip_skip*") obj[key] = -Math.abs(parseInt(s.clipSkip)) || -1;
 
-                if (val === "*lora*") obj[key] = s.selectedLora || "None";
-                if (val === "*lora2*") obj[key] = s.selectedLora2 || "None";
-                if (val === "*lora3*") obj[key] = s.selectedLora3 || "None";
-                if (val === "*lora4*") obj[key] = s.selectedLora4 || "None";
-                if (val === "*lorawt*") obj[key] = parseFloat(s.selectedLoraWt) || 1.0;
-                if (val === "*lorawt2*") obj[key] = parseFloat(s.selectedLoraWt2) || 1.0;
-                if (val === "*lorawt3*") obj[key] = parseFloat(s.selectedLoraWt3) || 1.0;
-                if (val === "*lorawt4*") obj[key] = parseFloat(s.selectedLoraWt4) || 1.0;
+                const resolvedLora = resolveLoraPlaceholder(val, loras, loraFallback);
+                if (resolvedLora !== undefined) {
+                    obj[key] = resolvedLora;
+                    continue;
+                }
 
                 if (val === "*width*") obj[key] = parseInt(s.imgWidth) || 512;
                 if (val === "*height*") obj[key] = parseInt(s.imgHeight) || 512;
