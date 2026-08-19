@@ -762,7 +762,13 @@ async function onGeneratePrompt() {
 
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
-        const lastMessage = context.chat[context.chat.length - 1].mes;
+        let lastMessage = "";
+        for (let i = context.chat.length - 1; i >= 0; i--) {
+            if (context.chat[i].mes && context.chat[i].mes.trim() !== "") {
+                lastMessage = context.chat[i].mes;
+                break;
+            }
+        }
         const s = extension_settings[extensionName];
         const tracker = s.includeTracker ? getLatestTracker(context.chat) : "";
 
