@@ -1136,40 +1136,6 @@ jQuery(async () => {
             extension_settings[extensionName].currentWorkflowName = $(e.target).val();
             snapshotActiveProfile();
             saveSettingsDebounced();
-
-            const isLocked = $("#kazuma_lock_preset").prop("checked");
-            if (isLocked) {
-                const { chatMetadata } = SillyTavern.getContext();
-                if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
-                chatMetadata['image-gen-kazuma'].lockedPreset = extension_settings[extensionName].currentWorkflowName;
-                saveChat();
-            }
-        });
-
-        $("#kazuma_lock_preset").on("change", function() {
-            const isLocked = $(this).prop("checked");
-            const { chatMetadata } = SillyTavern.getContext();
-            if (!chatMetadata['image-gen-kazuma']) chatMetadata['image-gen-kazuma'] = {};
-            
-            if (isLocked) {
-                chatMetadata['image-gen-kazuma'].lockedPreset = extension_settings[extensionName].currentWorkflowName;
-            } else {
-                delete chatMetadata['image-gen-kazuma'].lockedPreset;
-            }
-            saveChat();
-        });
-
-        eventSource.on(event_types.CHAT_CHANGED, function() {
-            const { chatMetadata } = SillyTavern.getContext();
-            if (chatMetadata && chatMetadata['image-gen-kazuma'] && chatMetadata['image-gen-kazuma'].lockedPreset) {
-                const lockedPreset = chatMetadata['image-gen-kazuma'].lockedPreset;
-                if (extension_settings[extensionName].currentWorkflowName !== lockedPreset) {
-                    $("#kazuma_workflow_list").val(lockedPreset).trigger('change');
-                }
-                $("#kazuma_lock_preset").prop("checked", true);
-                return;
-            }
-            $("#kazuma_lock_preset").prop("checked", false);
         });
 
         $("#kazuma_image_profile").on("change", (e) => switchProfile($(e.target).val(), { silent: true }));
