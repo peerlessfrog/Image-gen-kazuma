@@ -1858,6 +1858,7 @@ async function importLorasFromWorkflow() {
 }
 
 
+// --- MOBILE GALLERY FIX & LIGHTBOX ENHANCER ---
 (function() {
     let sourceImage = null;
     let enhanceInterval = null;
@@ -1868,7 +1869,7 @@ async function importLorasFromWorkflow() {
         
         enhanceInterval = setInterval(() => {
             attempts++;
-            if (attempts > 40) { // 2 seconds timeout
+            if (attempts > 60) { // 3 seconds timeout
                 clearInterval(enhanceInterval);
                 return;
             }
@@ -1886,8 +1887,8 @@ async function importLorasFromWorkflow() {
     }
 
     document.addEventListener('click', function(e) {
-        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image');
-        if ($img.length) {
+        const $img = $(e.target).closest('img.img_media, .mes_media_container img, .gallery-image, img');
+        if ($img.length && $img.closest('.mes_text, .mes_media_container').length) {
             if (window.innerWidth <= 1024) {
                 if (window.lastTappedGalleryImage !== $img[0]) {
                     e.preventDefault();
@@ -1910,27 +1911,36 @@ async function importLorasFromWorkflow() {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        const $container = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
-        const $controls = $container.find('.hover-menu, .media-controls, [class*="control"]').first();
+        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        if (!$wrapper.length) $wrapper = sourceImage.parent();
         
-        if ($controls.length) {
-            const $clonedControls = $controls.clone(true, true);
-            $clonedControls.addClass('kazuma-lightbox-controls');
+        // This is what gets the overlay TEXT and the hover-menu buttons
+        const $sourceElements = $wrapper.children().not('img, picture, video, a');
+        
+        if ($sourceElements.length) {
+            const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
+            $clonedControls.append($sourceElements.clone(true, true));
+            
             $clonedControls.css({
                 position: 'absolute',
-                bottom: '30px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex',
-                justifyContent: 'center',
-                zIndex: 999999,
-                pointerEvents: 'auto',
-                opacity: 1,
-                visibility: 'visible',
-                width: '100%',
-                background: 'transparent'
+                top: 0, left: 0, right: 0, bottom: 0,
+                pointerEvents: 'none',
+                zIndex: 2147483647,
+                display: 'block'
             });
-            $clonedControls.find('*').css({ opacity: 1, visibility: 'visible' });
+            
+            // Force buttons to be visible and clickable
+            $clonedControls.find('*').css({
+                opacity: 1, 
+                visibility: 'visible', 
+                pointerEvents: 'auto'
+            });
+            // Try to force display block on direct children if they are hidden
+            $clonedControls.children().each(function() {
+                if ($(this).css('display') === 'none') {
+                    $(this).css('display', 'flex');
+                }
+            });
 
             $clonedControls.on('click', '*', function(e) {
                 e.stopPropagation();
@@ -1943,50 +1953,58 @@ async function importLorasFromWorkflow() {
                 if ($target.css('position') === 'static') $target.css('position', 'relative');
                 $target.append($clonedControls);
             } else {
+                if ($modal.css('position') === 'static') $modal.css('position', 'relative');
                 $modal.append($clonedControls);
             }
         }
 
-        // Swipe functionality
+        // --- Swipe functionality (Top-Level Native Capturing) ---
         let touchStartX = 0;
         let touchEndX = 0;
         
-        // Find best touch target so we don't block ST's outer dismiss clicks
-        const touchTarget = $modal.find('.fancybox__viewport, .mfp-wrap, .modal-content, #dialogue_popup_text').first();
-        const $touch = touchTarget.length ? touchTarget : $modal;
+        if (window._kazumaTouchStart) window.removeEventListener('touchstart', window._kazumaTouchStart, true);
+        if (window._kazumaTouchEnd) window.removeEventListener('touchend', window._kazumaTouchEnd, true);
 
-        $touch.off('touchstart.kazuma touchend.kazuma');
-        
-        $touch.on('touchstart.kazuma', function(e) {
-            if (e.originalEvent && e.originalEvent.changedTouches) {
-                touchStartX = e.originalEvent.changedTouches[0].screenX;
+        window._kazumaTouchStart = function(e) {
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            if (e.changedTouches) {
+                touchStartX = e.changedTouches[0].screenX;
             }
-        });
-        
-        $touch.on('touchend.kazuma', function(e) {
-            if (e.originalEvent && e.originalEvent.changedTouches) {
-                touchEndX = e.originalEvent.changedTouches[0].screenX;
-                const threshold = 50;
+        };
+
+        window._kazumaTouchEnd = function(e) {
+            if (!$modal.is(':visible') || $(e.target).closest($modal).length === 0) return;
+            
+            if (e.changedTouches) {
+                touchEndX = e.changedTouches[0].screenX;
+                const threshold = 40;
+                let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+                if (!$wrapper.length) $wrapper = sourceImage.parent();
+                
+                // FIX: The arrows are in the PARENT of the container in ST's gallery view!
+                const $container = $wrapper.parent();
+                
                 if (touchEndX < touchStartX - threshold) { // Swipe Left (Next)
-                    const $next = $container.find('.right_menu_button, .right_arrow, i.fa-chevron-right').closest('div, button, i, span');
+                    const $next = $container.find('.fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"], .right_menu_button').closest('div, button, a, span');
                     if ($next.length) { 
-                        e.preventDefault();
-                        e.stopPropagation();
+                        e.preventDefault(); e.stopPropagation();
                         $next.click(); 
                         updateModalImg(); 
                     }
                 }
-                if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
-                    const $prev = $container.find('.left_menu_button, .left_arrow, i.fa-chevron-left').closest('div, button, i, span');
+                else if (touchEndX > touchStartX + threshold) { // Swipe Right (Prev)
+                    const $prev = $container.find('.fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"], .left_menu_button').closest('div, button, a, span');
                     if ($prev.length) { 
-                        e.preventDefault();
-                        e.stopPropagation();
+                        e.preventDefault(); e.stopPropagation();
                         $prev.click(); 
                         updateModalImg(); 
                     }
                 }
             }
-        });
+        };
+
+        window.addEventListener('touchstart', window._kazumaTouchStart, true);
+        window.addEventListener('touchend', window._kazumaTouchEnd, true);
 
         function updateModalImg() {
             setTimeout(() => {
