@@ -734,8 +734,15 @@ function getLatestTracker(chat) {
     return "";
 }
 
+let isKazumaGenerating = false;
+
 async function onGeneratePrompt() {
     if (!extension_settings[extensionName].enabled) return;
+    if (isKazumaGenerating) {
+        toastr.warning("Image generation is already in progress...");
+        return;
+    }
+    
     const context = getContext();
     if (!context.chat || context.chat.length === 0) return toastr.warning("No chat history.");
 
@@ -751,6 +758,7 @@ async function onGeneratePrompt() {
 
     // [START PROGRESS]
     showKazumaProgress("Generating Prompt...");
+    isKazumaGenerating = true;
 
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
@@ -839,9 +847,11 @@ async function onGeneratePrompt() {
 
     } catch (err) {
         // [HIDE PROGRESS ON ERROR]
-        hideKazumaProgress();
         console.error(err);
-        toastr.error("Generation failed. Check console.");
+        toastr.error("Error generating image.");
+    } finally {
+        isKazumaGenerating = false;
+        hideKazumaProgress();
     }
 }
 
@@ -967,59 +977,64 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
     // chat is loaded now, so finishing a generation after the user moved on must not write at all.
     const originChatId = getCurrentChatId();
 
-    // ponytail: async ticks overlap when ComfyUI is busy (e.g. rendering video), so guard both ends
-    let polling = false, finished = false, ticks = 0;
-    const checkInterval = setInterval(async () => {
-        if (polling || finished) return;
+    return new Promise((resolve) => {
+        // ponytail: async ticks overlap when ComfyUI is busy (e.g. rendering video), so guard both ends
+        let polling = false, finished = false, ticks = 0;
+        const checkInterval = setInterval(async () => {
+            if (polling || finished) return;
 
-        if (getCurrentChatId() !== originChatId) {
-            finished = true;
-            clearInterval(checkInterval);
-            hideKazumaProgress();
-            console.warn(`[${extensionName}] chat changed while rendering prompt_id=${promptId}; abandoning insert`);
-            toastr.warning("Chat changed while the image was rendering - it was not inserted.", "Image Gen Kazuma");
-            return;
-        }
-
-        if (++ticks > MAX_POLL_TICKS) {
-            finished = true;
-            clearInterval(checkInterval);
-            hideKazumaProgress();
-            toastr.error("Timed out waiting for ComfyUI.", "Image Gen Kazuma");
-            return;
-        }
-
-        polling = true;
-        try {
-            const h = await (await fetch(`${baseUrl}/history/${promptId}`)).json();
-            if (h[promptId] && !finished) {
+            if (getCurrentChatId() !== originChatId) {
                 finished = true;
                 clearInterval(checkInterval);
-                const outputs = h[promptId].outputs;
-                let finalImage = null;
-                for (const nodeId in outputs) {
-                    const nodeOutput = outputs[nodeId];
-                    if (nodeOutput.images && nodeOutput.images.length > 0) {
-                        finalImage = nodeOutput.images[0];
-                        break;
-                    }
-                }
-                if (finalImage) {
-                    // [UPDATE TEXT]
-                    showKazumaProgress("Downloading...");
-
-                    console.log(`[${extensionName}] complete prompt_id=${promptId} file=${finalImage.filename}`);
-                    const imgUrl = `${baseUrl}/view?filename=${finalImage.filename}&subfolder=${finalImage.subfolder}&type=${finalImage.type}`;
-                    await insertImageToChat(imgUrl, positivePrompt, target, originChatId);
-
-                    // [HIDE WHEN DONE]
-                    hideKazumaProgress();
-                } else {
-                    hideKazumaProgress();
-                }
+                hideKazumaProgress();
+                console.warn(`[${extensionName}] chat changed while rendering prompt_id=${promptId}; abandoning insert`);
+                toastr.warning("Chat changed while the image was rendering - it was not inserted.", "Image Gen Kazuma");
+                resolve();
+                return;
             }
-        } catch (e) { } finally { polling = false; }
-    }, 1000);
+
+            if (++ticks > MAX_POLL_TICKS) {
+                finished = true;
+                clearInterval(checkInterval);
+                hideKazumaProgress();
+                toastr.error("Timed out waiting for ComfyUI.", "Image Gen Kazuma");
+                resolve();
+                return;
+            }
+
+            polling = true;
+            try {
+                const h = await (await fetch(`${baseUrl}/history/${promptId}`)).json();
+                if (h[promptId] && !finished) {
+                    finished = true;
+                    clearInterval(checkInterval);
+                    const outputs = h[promptId].outputs;
+                    let finalImage = null;
+                    for (const nodeId in outputs) {
+                        const nodeOutput = outputs[nodeId];
+                        if (nodeOutput.images && nodeOutput.images.length > 0) {
+                            finalImage = nodeOutput.images[0];
+                            break;
+                        }
+                    }
+                    if (finalImage) {
+                        // [UPDATE TEXT]
+                        showKazumaProgress("Downloading...");
+
+                        console.log(`[${extensionName}] complete prompt_id=${promptId} file=${finalImage.filename}`);
+                        const imgUrl = `${baseUrl}/view?filename=${finalImage.filename}&subfolder=${finalImage.subfolder}&type=${finalImage.type}`;
+                        await insertImageToChat(imgUrl, positivePrompt, target, originChatId);
+
+                        // [HIDE WHEN DONE]
+                        hideKazumaProgress();
+                    } else {
+                        console.warn(`[${extensionName}] no images in output for prompt_id=${promptId}`);
+                    }
+                    resolve();
+                }
+            } catch (e) { } finally { polling = false; }
+        }, 1000);
+    });
 }
 
 function blobToBase64(blob) { return new Promise((resolve) => { const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob); }); }
