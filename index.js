@@ -1310,6 +1310,62 @@ jQuery(async () => {
 
         let att = 0; const int = setInterval(() => { if ($("#kazuma_quick_gen").length > 0) { clearInterval(int); return; } createChatButton(); att++; if (att > 5) clearInterval(int); }, 1000);
         $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); onGeneratePrompt(); });
+
+        // Hover button for regenerating images from prompts
+        $(document).on("mouseenter", ".mes_media_container, .gallery-image, .inline-image-container", function() {
+            if ($(this).find('.kazuma_regen_btn').length > 0) return;
+            if (!$(this).find('img').length) return;
+
+            const $btn = $('<div class="kazuma_regen_btn interactable" title="Edit Prompt & Generate New Response" style="position: absolute; top: 10px; left: 10px; z-index: 100; opacity: 0; padding: 6px 8px; font-size: 14px; border-radius: 4px; background: var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); backdrop-filter: blur(5px); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s;"><i class="fa-solid fa-redo" style="margin-right: 5px;"></i> Edit</div>');
+            
+            $(this).on('mouseenter', function() { $btn.css('opacity', '0.7'); });
+            $(this).on('mouseleave', function() { $btn.css('opacity', '0'); });
+            $btn.on('mouseenter', function() { $(this).css('opacity', '1'); });
+            
+            $btn.on('click', async function(e) {
+                e.preventDefault(); e.stopPropagation();
+                if (isKazumaGenerating) { toastr.warning("Already generating..."); return; }
+                const mesId = $(this).closest('.mes').attr('mesid');
+                const chat = getContext().chat;
+                const msg = chat && chat[mesId] ? chat[mesId] : null;
+                if (!msg) return;
+
+                const imgUrl = $(this).closest('.mes_media_container, .gallery-image, .inline-image-container').find('img').attr('src');
+                let promptText = "";
+                if (msg.extra && msg.extra.media) {
+                    const attachment = msg.extra.media.find(m => imgUrl && imgUrl.includes(m.url));
+                    if (attachment && attachment.title) promptText = attachment.title;
+                }
+
+                const $content = $(`
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <p><b>Edit prompt and generate as a new message:</b></p>
+                    <textarea class="text_pole kazuma_regen_text" rows="8" style="width:100%; resize:vertical; font-family:monospace;">${promptText}</textarea>
+                    </div>
+                `);
+                const popup = new Popup($content, POPUP_TYPE.CONFIRM, "New Image Response", { okButton: "New Response", cancelButton: "Cancel" });
+                const confirmed = await popup.show();
+
+                if (confirmed) {
+                    const finalPrompt = $content.find('.kazuma_regen_text').val().trim();
+                    if (!finalPrompt) return;
+                    showKazumaProgress("Sending to ComfyUI...");
+                    isKazumaGenerating = true;
+                    try {
+                        await generateWithComfy(finalPrompt, null);
+                    } finally {
+                        isKazumaGenerating = false;
+                        hideKazumaProgress();
+                    }
+                }
+            });
+
+            if ($(this).css('position') === 'static') {
+                $(this).css('position', 'relative');
+            }
+            $(this).append($btn);
+        });
+
     } catch (e) { console.error(e); }
 });
 
