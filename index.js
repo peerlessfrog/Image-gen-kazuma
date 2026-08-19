@@ -868,23 +868,21 @@ async function onGeneratePrompt() {
             // Build messages using image gen context preset
             const messages = [];
 
-            // Add the instruction as a system prompt
-            if (instruction && instruction.trim()) {
-                messages.push({ role: "system", content: instruction });
-            }
-
             // Add chat history based on preset
             const chatHistory = buildChatHistoryFromPreset();
             messages.push(...chatHistory);
             
-            // To ensure generation executes properly, append a small trigger message 
-            // since the core instruction is now fully encapsulated in the System Prompt
-            messages.push({ role: "user", content: "Generate the image prompt for the current scene." });
+            // Add the fully resolved template instruction as the final user message
+            // This ensures the LLM directly acts on the scene and task rather than waiting for input
+            if (instruction && instruction.trim()) {
+                messages.push({ role: "user", content: instruction });
+            }
 
             const result = await context.ConnectionManagerRequestService.sendRequest(requestProfile, messages);
             generatedText = (typeof result === "string") ? result : (result?.content ?? "");
         } else {
-            generatedText = await generateQuietPrompt(instruction, true);
+            // Send as a direct User prompt (false) rather than an injected System prompt
+            generatedText = await generateQuietPrompt(instruction, false);
         }
 
         // ponytail: drop <think>/<thinking> blocks (incl. unclosed ones); no-op when absent
@@ -1316,7 +1314,8 @@ jQuery(async () => {
             if ($(this).find('.kazuma_regen_btn').length > 0) return;
             if (!$(this).find('img').length) return;
 
-            const $btn = $('<div class="kazuma_regen_btn interactable" title="Edit Prompt & Generate New Response" style="position: absolute; top: 10px; left: 10px; z-index: 100; opacity: 0; padding: 6px 8px; font-size: 14px; border-radius: 4px; background: var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); backdrop-filter: blur(5px); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: opacity 0.2s;"><i class="fa-solid fa-redo" style="margin-right: 5px;"></i> Edit</div>');
+            // ST usually puts the zoom and trash icons at top-right. Let's place ours at right: 45px to sit nicely next to them.
+            const $btn = $('<div class="kazuma_regen_btn interactable" title="Edit Prompt & Generate New Response" style="position: absolute; top: 8px; right: 45px; z-index: 100; opacity: 0; padding: 6px; font-size: 14px; border-radius: 5px; background: var(--SmartThemeBlurTintColor); color: var(--SmartThemeBodyColor); backdrop-filter: blur(5px); cursor: pointer; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; transition: opacity 0.2s;"><i class="fa-solid fa-redo"></i></div>');
             
             $(this).on('mouseenter', function() { $btn.css('opacity', '0.7'); });
             $(this).on('mouseleave', function() { $btn.css('opacity', '0'); });
@@ -1332,8 +1331,10 @@ jQuery(async () => {
 
                 const imgUrl = $(this).closest('.mes_media_container, .gallery-image, .inline-image-container').find('img').attr('src');
                 let promptText = "";
-                if (msg.extra && msg.extra.media) {
-                    const attachment = msg.extra.media.find(m => imgUrl && imgUrl.includes(m.url));
+                if (msg.extra && msg.extra.media && msg.extra.media.length > 0) {
+                    // Try to match the image URL exactly, or fall back to the most recent attachment in the gallery
+                    let attachment = msg.extra.media.find(m => imgUrl && (imgUrl.includes(m.url) || m.url.includes(imgUrl)));
+                    if (!attachment) attachment = msg.extra.media[msg.extra.media.length - 1];
                     if (attachment && attachment.title) promptText = attachment.title;
                 }
 
@@ -1343,11 +1344,17 @@ jQuery(async () => {
                     <textarea class="text_pole kazuma_regen_text" rows="8" style="width:100%; resize:vertical; font-family:monospace;">${promptText}</textarea>
                     </div>
                 `);
+
+                // ST's Popup clones/detaches the DOM element, so we must capture live edits
+                // into a variable before the popup closes and destroys the active DOM element.
+                let editedPrompt = promptText;
+                $content.find('.kazuma_regen_text').on('input', function() { editedPrompt = $(this).val(); });
+
                 const popup = new Popup($content, POPUP_TYPE.CONFIRM, "New Image Response", { okButton: "New Response", cancelButton: "Cancel" });
                 const confirmed = await popup.show();
 
                 if (confirmed) {
-                    const finalPrompt = $content.find('.kazuma_regen_text').val().trim();
+                    const finalPrompt = editedPrompt.trim();
                     if (!finalPrompt) return;
                     showKazumaProgress("Sending to ComfyUI...");
                     isKazumaGenerating = true;
