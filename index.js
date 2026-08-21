@@ -482,7 +482,7 @@ async function deleteImageGenPreset() {
     }
 }
 
-function buildSystemPromptFromPreset() {
+function buildSystemPromptFromPreset(customOptions = {}) {
     const settings = extension_settings[extensionName];
     const presets = settings.imageGenPresets || {};
     const presetName = settings.imageGenPreset;
@@ -512,23 +512,41 @@ function buildSystemPromptFromPreset() {
     systemPrompt = systemPrompt.replace(/\{\{group_info\}\}/g, groupInfo);
 
     const s = extension_settings[extensionName];
-    const style = s.promptStyle || "standard";
-    const persp = s.promptPerspective || "scene";
-    const extra = s.promptExtra || "";
-
+    
+    // Inject Custom Overrides if provided
     let styleInst = "", perspInst = "";
-    if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
-    else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
-    else if (style === "krea2") styleInst = KREA2_INSTRUCTION;
-    else styleInst = "Use a list of detailed keywords/descriptors.";
+    
+    if (customOptions.customStyle !== undefined) {
+        styleInst = customOptions.customStyle;
+    } else {
+        const style = s.promptStyle || "standard";
+        if (style === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
+        else if (style === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
+        else if (style === "krea2") styleInst = KREA2_INSTRUCTION;
+        else styleInst = "Use a list of detailed keywords/descriptors.";
+    }
 
-    if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
-    else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
-    else perspInst = "Describe the entire environment and atmosphere.";
+    if (customOptions.customPersp !== undefined) {
+        perspInst = customOptions.customPersp;
+    } else {
+        const persp = s.promptPerspective || "scene";
+        if (persp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
+        else if (persp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
+        else perspInst = "Describe the entire environment and atmosphere.";
+    }
+
+    const extra = s.promptExtra || "";
 
     const tracker = s.includeTracker ? getLatestTracker(context.chat) : "";
     let lastMessage = "";
-    for (let i = context.chat.length - 1; i >= 0; i--) {
+    
+    // Determine where to pull the scene text from
+    let startIdx = context.chat.length - 1;
+    if (customOptions.targetMesId !== undefined) {
+        startIdx = customOptions.targetMesId;
+    }
+    
+    for (let i = startIdx; i >= 0; i--) {
         if (context.chat[i].mes && context.chat[i].mes.trim() !== "") {
             lastMessage = context.chat[i].mes;
             break;
@@ -576,7 +594,7 @@ function getSummaryceptionText() {
     return snippets.join(' ');
 }
 
-function buildChatHistoryFromPreset() {
+function buildChatHistoryFromPreset(customOptions = {}) {
     const settings = extension_settings[extensionName];
     const presets = settings.imageGenPresets || {};
     const presetName = settings.imageGenPreset;
@@ -587,7 +605,13 @@ function buildChatHistoryFromPreset() {
     const history = [];
 
     if (preset.includeLastMessages > 0 && context.chat && context.chat.length > 0) {
-        const recentMessages = context.chat.slice(-preset.includeLastMessages);
+        let endIdx = context.chat.length;
+        if (customOptions.targetMesId !== undefined) {
+            endIdx = customOptions.targetMesId + 1;
+        }
+
+        const startIdx = Math.max(0, endIdx - preset.includeLastMessages);
+        const recentMessages = context.chat.slice(startIdx, endIdx);
 
         for (const msg of recentMessages) {
             let role = msg.is_user ? "user" : "assistant";
@@ -865,7 +889,7 @@ function getLatestTracker(chat) {
 
 let isKazumaGenerating = false;
 
-async function onGeneratePrompt() {
+async function onGeneratePrompt(customOptions = {}) {
     if (!extension_settings[extensionName].enabled) return;
     if (isKazumaGenerating) {
         toastr.warning("Image generation is already in progress...");
@@ -893,7 +917,7 @@ async function onGeneratePrompt() {
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
 
-        const instruction = buildSystemPromptFromPreset();
+        const instruction = buildSystemPromptFromPreset(customOptions);
 
         let generatedText;
         if (useOwnProfile) {
@@ -901,7 +925,7 @@ async function onGeneratePrompt() {
             const messages = [];
 
             // Add chat history based on preset
-            const chatHistory = buildChatHistoryFromPreset();
+            const chatHistory = buildChatHistoryFromPreset(customOptions);
             messages.push(...chatHistory);
             
             // Add the fully resolved template instruction as the final user message
@@ -942,11 +966,20 @@ async function onGeneratePrompt() {
             generatedText = currentText;
             // Show progress again
             showKazumaProgress("Sending to ComfyUI...");
+        } else {
+            showKazumaProgress("Sending to ComfyUI...");
         }
 
-        // Update progress text
-        showKazumaProgress("Sending to ComfyUI...");
-        await generateWithComfy(generatedText, null);
+        // Pass specific target if provided
+        let target = null;
+        if (customOptions.targetMesId !== undefined) {
+            target = { 
+                message: context.chat[customOptions.targetMesId], 
+                element: $(`.mes[mesid="${customOptions.targetMesId}"]`)[0] 
+            };
+        }
+
+        await generateWithComfy(generatedText, target);
 
     } catch (err) {
         // [HIDE PROGRESS ON ERROR]
@@ -1208,6 +1241,7 @@ async function insertImageToChat(imgUrl, promptText, target = null, originChatId
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             await saveChat();
             toastr.success("Gallery updated!");
+            if (typeof window._kazumaUpdateModalImg === "function") window._kazumaUpdateModalImg();
         } else {
             const newMessage = {
                 name: "Image Gen Kazuma", is_user: false, is_system: true, send_date: Date.now(),
@@ -1340,6 +1374,67 @@ jQuery(async () => {
 
         let att = 0; const int = setInterval(() => { if ($("#kazuma_quick_gen").length > 0) { clearInterval(int); return; } createChatButton(); att++; if (att > 5) clearInterval(int); }, 1000);
         $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); onGeneratePrompt(); });
+
+        // Hover button for generating image from specific historical message
+        $(document).on("mouseenter", ".mes", function() {
+            if ($(this).find('.kazuma_msg_gen_btn').length > 0) return;
+            const $btnContainer = $(this).find('.mes_buttons');
+            if ($btnContainer.length) {
+                const $btn = $('<div class="mes_button kazuma_msg_gen_btn interactable" title="Generate Scene Image from this message"><i class="fa-solid fa-camera"></i></div>');
+                
+                $btn.on('click', async function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    const mesId = $(this).closest('.mes').attr('mesid');
+                    if (!mesId) return;
+                    
+                    const s = extension_settings[extensionName];
+                    const defaultPersp = s.promptPerspective || "scene";
+                    const defaultStyle = s.promptStyle || "standard";
+                    
+                    let perspInst = "", styleInst = "";
+                    if (defaultPersp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
+                    else if (defaultPersp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
+                    else perspInst = "Describe the entire environment and atmosphere.";
+
+                    if (defaultStyle === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
+                    else if (defaultStyle === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
+                    else if (defaultStyle === "krea2") styleInst = KREA2_INSTRUCTION;
+                    else styleInst = "Use a list of detailed keywords/descriptors.";
+                    
+                    const $content = $(`
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <p><b>Generate Scene Image</b></p>
+                        <p><i>Generate an image based on the chat history leading up to and including this message.</i></p>
+                        
+                        <label><b>Perspective Override:</b></label>
+                        <textarea class="text_pole kazuma_custom_persp" rows="2" style="width:100%; resize:vertical; font-family:monospace;">${perspInst}</textarea>
+                        
+                        <label><b>Style Constraint Override:</b></label>
+                        <textarea class="text_pole kazuma_custom_style" rows="2" style="width:100%; resize:vertical; font-family:monospace;">${styleInst}</textarea>
+                        </div>
+                    `);
+
+                    let finalPersp = perspInst;
+                    let finalStyle = styleInst;
+                    $content.find('.kazuma_custom_persp').on('input', function() { finalPersp = $(this).val(); });
+                    $content.find('.kazuma_custom_style').on('input', function() { finalStyle = $(this).val(); });
+
+                    const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Custom Scene Generation", { okButton: "Generate", cancelButton: "Cancel" });
+                    const confirmed = await popup.show();
+
+                    if (confirmed) {
+                        onGeneratePrompt({ 
+                            targetMesId: parseInt(mesId, 10), 
+                            customPersp: finalPersp, 
+                            customStyle: finalStyle 
+                        });
+                    }
+                });
+                
+                // Usually ST puts the extra buttons before the edit/delete buttons
+                $btnContainer.prepend($btn);
+            }
+        });
 
         // Hover button for regenerating images from prompts
         $(document).on("mouseenter", ".mes_media_container, .gallery-image, .inline-image-container", function() {
@@ -2295,5 +2390,8 @@ async function importLorasFromWorkflow() {
                 }
             }, 100);
         }
+        
+        // Expose globally so async callbacks (like insertImageToChat) can force a refresh
+        window._kazumaUpdateModalImg = updateModalImg;
     }
 })();
