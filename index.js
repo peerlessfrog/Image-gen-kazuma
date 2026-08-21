@@ -1238,6 +1238,12 @@ async function insertImageToChat(imgUrl, promptText, target = null, originChatId
             target.message.extra.media_display = "gallery";
             target.message.extra.media.push(mediaAttachment);
             target.message.extra.media_index = target.message.extra.media.length - 1;
+            
+            console.log("[DEBUG KAZUMA] insertImageToChat target:", target);
+            console.log("[DEBUG KAZUMA] target.element:", target.element);
+            console.log("[DEBUG KAZUMA] is jQuery:", target.element instanceof $);
+            console.log("[DEBUG KAZUMA] has find:", typeof target.element.find);
+            
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             await saveChat();
             toastr.success("Gallery updated!");
