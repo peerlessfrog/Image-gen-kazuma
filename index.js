@@ -887,17 +887,50 @@ function getLatestTracker(chat) {
     return "";
 }
 
-let isKazumaGenerating = false;
+let kazumaActiveTasks = 0;
+
+function incrementKazumaTask(text = "Processing...") {
+    kazumaActiveTasks++;
+    showKazumaProgress(text);
+}
+
+function decrementKazumaTask() {
+    kazumaActiveTasks--;
+    if (kazumaActiveTasks < 0) kazumaActiveTasks = 0;
+    
+    if (kazumaActiveTasks === 0) {
+        hideKazumaProgress();
+    } else {
+        // Still tasks running, update text to reflect count
+        let currentText = $("#kazuma_progress_text").text().replace(/\s\(\d+\)$/, '');
+        $("#kazuma_progress_text").text(currentText + ` (${kazumaActiveTasks})`);
+    }
+}
+
+function showKazumaProgress(text = "Processing...") {
+    if (kazumaActiveTasks > 1) {
+        $("#kazuma_progress_text").text(text + ` (${kazumaActiveTasks})`);
+    } else {
+        $("#kazuma_progress_text").text(text);
+    }
+    $("#kazuma_progress_overlay").css("display", "flex");
+}
+
+function hideKazumaProgress() {
+    $("#kazuma_progress_overlay").hide();
+}
 
 async function onGeneratePrompt(customOptions = {}) {
     if (!extension_settings[extensionName].enabled) return;
-    if (isKazumaGenerating) {
-        toastr.warning("Image generation is already in progress...");
-        return;
-    }
+
+    // [START PROGRESS]
+    incrementKazumaTask("Generating Prompt...");
     
     const context = getContext();
-    if (!context.chat || context.chat.length === 0) return toastr.warning("No chat history.");
+    if (!context.chat || context.chat.length === 0) {
+        decrementKazumaTask();
+        return toastr.warning("No chat history.");
+    }
 
     const strategy = extension_settings[extensionName].profileStrategy || "current";
     const requestProfile = extension_settings[extensionName].connectionProfile;
@@ -909,10 +942,6 @@ async function onGeneratePrompt(customOptions = {}) {
     // set that preset on the connection profile itself in ST's Connection Profile manager - the
     // profile carries its preset with it, so selecting it here uses both automatically.
     const useOwnProfile = strategy === "specific" && !!requestProfile && isConnectionManagerActive();
-
-    // [START PROGRESS]
-    showKazumaProgress("Generating Prompt...");
-    isKazumaGenerating = true;
 
     try {
         toastr.info("Visualizing...", "Image Gen Kazuma");
@@ -991,8 +1020,7 @@ async function onGeneratePrompt(customOptions = {}) {
         console.error(err);
         toastr.error("Error generating image.");
     } finally {
-        isKazumaGenerating = false;
-        hideKazumaProgress();
+        decrementKazumaTask();
     }
 }
 
@@ -1111,7 +1139,13 @@ async function onImageSwiped(data) {
 
     const prompt = mediaObj.title;
     toastr.info("New variation...", "Image Gen Kazuma");
-    await generateWithComfy(prompt, { message: message, element: $(element) });
+    
+    incrementKazumaTask("Rendering Image...");
+    try {
+        await generateWithComfy(prompt, { message: message, element: $(element) });
+    } finally {
+        decrementKazumaTask();
+    }
 }
 
 // ponytail: 20 min at 1s ticks. Without a cap a prompt that never lands (ComfyUI restarted,
@@ -1135,7 +1169,6 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
             if (getCurrentChatId() !== originChatId) {
                 finished = true;
                 clearInterval(checkInterval);
-                hideKazumaProgress();
                 console.warn(`[${extensionName}] chat changed while rendering prompt_id=${promptId}; abandoning insert`);
                 toastr.warning("Chat changed while the image was rendering - it was not inserted.", "Image Gen Kazuma");
                 resolve();
@@ -1145,7 +1178,6 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
             if (++ticks > MAX_POLL_TICKS) {
                 finished = true;
                 clearInterval(checkInterval);
-                hideKazumaProgress();
                 toastr.error("Timed out waiting for ComfyUI.", "Image Gen Kazuma");
                 resolve();
                 return;
@@ -1173,9 +1205,6 @@ async function waitForGeneration(baseUrl, promptId, positivePrompt, target) {
                         console.log(`[${extensionName}] complete prompt_id=${promptId} file=${finalImage.filename}`);
                         const imgUrl = `${baseUrl}/view?filename=${finalImage.filename}&subfolder=${finalImage.subfolder}&type=${finalImage.type}`;
                         await insertImageToChat(imgUrl, positivePrompt, target, originChatId);
-
-                        // [HIDE WHEN DONE]
-                        hideKazumaProgress();
                     } else {
                         console.warn(`[${extensionName}] no images in output for prompt_id=${promptId}`);
                     }
@@ -1516,15 +1545,11 @@ jQuery(async () => {
                 if (confirmed) {
                     const finalPrompt = editedPrompt.trim();
                     if (!finalPrompt) return;
-                    showKazumaProgress("Sending to ComfyUI...");
+                    incrementKazumaTask("Sending to ComfyUI...");
                     try {
                         await generateWithComfy(finalPrompt, null);
                     } finally {
-                        // We do not reset isKazumaGenerating here, because we aren't locking the state.
-                        // Let the generation silently finish or update the progress bar.
-                        // If another generation was running, we don't want to prematurely hide the progress bar.
-                        // However, we still call hideKazumaProgress() which might hide it early, but that's a visual detail.
-                        hideKazumaProgress();
+                        decrementKazumaTask();
                     }
                 }
             });
@@ -1616,14 +1641,6 @@ function populateProfiles() {
 }
 
 async function onFileSelected(e) { const f=e.target.files[0];if(!f)return;const t=await f.text();try{const j=JSON.parse(t),n=prompt("Name:",f.name.replace(".json",""));if(n){extension_settings[extensionName].savedWorkflows[n]=j;extension_settings[extensionName].currentWorkflowName=n;saveSettingsDebounced();populateWorkflows();}}catch{toastr.error("Invalid JSON");}$(e.target).val('');}
-function showKazumaProgress(text = "Processing...") {
-    $("#kazuma_progress_text").text(text);
-    $("#kazuma_progress_overlay").css("display", "flex");
-}
-
-function hideKazumaProgress() {
-    $("#kazuma_progress_overlay").hide();
-}
 
 /* --- IMAGE PROFILES ---
  * A profile is one workflow plus everything that has to move with it: the checkpoint, sampler,
