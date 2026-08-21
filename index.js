@@ -2268,17 +2268,14 @@ async function importLorasFromWorkflow() {
         if (!sourceImage) return;
         $modal.find('.kazuma-lightbox-controls').remove();
 
-        let $wrapper = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container');
+        let $wrapper = sourceImage.closest('.swiper-slide, .slick-slide, .gallery-image, .inline-image-container');
+        if (!$wrapper.length) $wrapper = sourceImage.closest('.mes_media_container');
         if (!$wrapper.length) $wrapper = sourceImage.parent();
         
-        // This is what gets the overlay TEXT and the hover-menu buttons
-        const $sourceElements = $wrapper.children().not('img, picture, video, a, .swiper-slide, .slick-slide, .gallery-image');
-        const $swipeContainer = sourceImage.closest('.mes_media_container, .gallery-image, .inline-image-container').parent();
+        // This is what gets the hover-menu buttons (and ST's native swipe block if present)
+        const $sourceElements = $wrapper.children().not('img, picture, video, a, .swiper-slide, .slick-slide, .gallery-image, .swiper-container, .swiper-wrapper, .slick-slider, .slick-list, .slick-track, pre');
         
-        const $origLeft = $swipeContainer.find('.left_menu_button, .left_arrow, i.fa-chevron-left, .fa-chevron-left, .fa-arrow-left, [title*="Prev"], [title*="prev"]').closest('div, button, a, span').first();
-        const $origRight = $swipeContainer.find('.right_menu_button, .right_arrow, i.fa-chevron-right, .fa-chevron-right, .fa-arrow-right, [title*="Next"], [title*="next"]').closest('div, button, a, span').first();
-        
-        if ($sourceElements.length || $origLeft.length || $origRight.length) {
+        if ($sourceElements.length) {
             const $clonedControls = $('<div></div>').addClass('kazuma-lightbox-controls');
             
             $clonedControls.css({
@@ -2287,7 +2284,7 @@ async function importLorasFromWorkflow() {
                 left: '0',
                 width: '100%',
                 display: 'flex',
-                justifyContent: 'space-between',
+                justifyContent: 'center',
                 alignItems: 'center',
                 padding: '0 20px',
                 boxSizing: 'border-box',
@@ -2295,22 +2292,7 @@ async function importLorasFromWorkflow() {
                 pointerEvents: 'none' // Let clicks pass through empty space
             });
             
-            // 1. Left Arrow
-            const $leftContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
-            if ($origLeft.length) {
-                const $cloneLeft = $origLeft.clone(false, false);
-                $cloneLeft.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
-                $cloneLeft.on('click', function(e) {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    $origLeft.click();
-                    updateModalImg();
-                });
-                $leftContainer.append($cloneLeft);
-            }
-            $clonedControls.append($leftContainer);
-            
-            // 2. Center Icons (Zoom/Trash/Edit)
+            // 2. Center Icons (Zoom/Trash/Edit/Arrows)
             const $centerContainer = $('<div></div>').css({ 
                 display: 'flex', 
                 gap: '15px', 
@@ -2318,9 +2300,9 @@ async function importLorasFromWorkflow() {
                 justifyContent: 'center',
                 alignItems: 'center'
             });
+            
             if ($sourceElements.length) {
-                // Filter out arrows from center elements
-                const $origCenter = $sourceElements.not('.left_menu_button, .right_menu_button, .left_arrow, .right_arrow, .fa-chevron-left, .fa-chevron-right');
+                const $origCenter = $sourceElements;
                 
                 let $centerIcons = $origCenter.clone(false, false);
                 
@@ -2350,21 +2332,6 @@ async function importLorasFromWorkflow() {
             }
             $clonedControls.append($centerContainer);
             
-            // 3. Right Arrow
-            const $rightContainer = $('<div></div>').css({ pointerEvents: 'auto', display: 'flex' });
-            if ($origRight.length) {
-                const $cloneRight = $origRight.clone(false, false);
-                $cloneRight.css({ opacity: 1, visibility: 'visible', pointerEvents: 'auto', display: 'flex' });
-                $cloneRight.on('click', function(e) {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    $origRight.click();
-                    updateModalImg();
-                });
-                $rightContainer.append($cloneRight);
-            }
-            $clonedControls.append($rightContainer);
-
             // Target the best container to append to
             const $target = $modal.find('.img_enlarged_holder, .img_enlarged_container, .popup-body, #dialogue_popup_text, .mfp-container, .modal-content, .fancybox__content, .fancybox__carousel .fancybox__slide.is-selected').first();
             if ($target.length) {
@@ -2464,6 +2431,18 @@ async function importLorasFromWorkflow() {
                         const newSrc = $currentImg.length ? $currentImg.attr('src') : sourceImage.attr('src');
                         if (newSrc && $modalImg.attr('src') !== newSrc) {
                             $modalImg.attr('src', newSrc);
+                            
+                            // Update the text prompt overlay in the Lightbox to match the new image
+                            const newTitle = $currentImg.length ? $currentImg.attr('title') : sourceImage.attr('title');
+                            if (newTitle) {
+                                const $titleCode = $modal.find('.img_enlarged_title');
+                                if ($titleCode.length) {
+                                    // Strip out the copy button HTML before setting text, then re-append it if needed
+                                    const $copyBtn = $titleCode.find('.code-copy').detach();
+                                    $titleCode.text(newTitle);
+                                    if ($copyBtn.length) $titleCode.append($copyBtn);
+                                }
+                            }
                             
                             // Re-bind our tracking image to the newly created DOM node
                             if ($currentImg.length) {
