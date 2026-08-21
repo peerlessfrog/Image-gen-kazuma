@@ -977,8 +977,13 @@ async function onGeneratePrompt(customOptions = {}) {
                 message: context.chat[customOptions.targetMesId], 
                 element: $(`.mes[mesid="${customOptions.targetMesId}"]`) 
             };
+            console.log("[DEBUG KAZUMA] onGeneratePrompt set target for mesId", customOptions.targetMesId);
+            console.log("[DEBUG KAZUMA] onGeneratePrompt target.element type:", typeof target.element);
+            console.log("[DEBUG KAZUMA] onGeneratePrompt target.element is jQuery:", target.element instanceof $);
+            console.log("[DEBUG KAZUMA] onGeneratePrompt target.element length:", target.element ? target.element.length : 0);
         }
 
+        console.log("[DEBUG KAZUMA] Calling generateWithComfy. Target is:", target);
         await generateWithComfy(generatedText, target);
 
     } catch (err) {
@@ -992,6 +997,12 @@ async function onGeneratePrompt(customOptions = {}) {
 }
 
 async function generateWithComfy(positivePrompt, target = null) {
+    console.log("[DEBUG KAZUMA] Inside generateWithComfy. Target received:", target);
+    if (target) {
+        console.log("[DEBUG KAZUMA] generateWithComfy target.element is jQuery:", target.element instanceof $);
+        console.log("[DEBUG KAZUMA] generateWithComfy target.element.find type:", typeof target.element?.find);
+    }
+    
     const url = extension_settings[extensionName].comfyUrl;
     const currentName = extension_settings[extensionName].currentWorkflowName;
 
@@ -1240,9 +1251,21 @@ async function insertImageToChat(imgUrl, promptText, target = null, originChatId
             target.message.extra.media_index = target.message.extra.media.length - 1;
             
             console.log("[DEBUG KAZUMA] insertImageToChat target:", target);
-            console.log("[DEBUG KAZUMA] target.element:", target.element);
-            console.log("[DEBUG KAZUMA] is jQuery:", target.element instanceof $);
-            console.log("[DEBUG KAZUMA] has find:", typeof target.element.find);
+            if (target.element) {
+                console.log("[DEBUG KAZUMA] target.element isArray?", Array.isArray(target.element));
+                console.log("[DEBUG KAZUMA] target.element typeof:", typeof target.element);
+                console.log("[DEBUG KAZUMA] target.element prototype:", Object.getPrototypeOf(target.element));
+                console.log("[DEBUG KAZUMA] target.element is jQuery?", target.element instanceof jQuery);
+                console.log("[DEBUG KAZUMA] target.element instanceof $?", target.element instanceof $);
+                console.log("[DEBUG KAZUMA] target.element.find type:", typeof target.element.find);
+                console.log("[DEBUG KAZUMA] target.element length:", target.element.length);
+                if (target.element.length > 0) {
+                    console.log("[DEBUG KAZUMA] first element:", target.element[0]);
+                    console.log("[DEBUG KAZUMA] first element type:", target.element[0].nodeName);
+                }
+            } else {
+                console.log("[DEBUG KAZUMA] target.element is NULL or UNDEFINED");
+            }
             
             if (typeof appendMediaToMessage === "function") appendMediaToMessage(target.message, target.element);
             await saveChat();
