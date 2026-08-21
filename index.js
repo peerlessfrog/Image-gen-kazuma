@@ -1436,7 +1436,46 @@ jQuery(async () => {
         eventSource.on(event_types.CHAT_CHANGED, onChatChangedForProfiles);
 
         let att = 0; const int = setInterval(() => { if ($("#kazuma_quick_gen").length > 0) { clearInterval(int); return; } createChatButton(); att++; if (att > 5) clearInterval(int); }, 1000);
-        $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); onGeneratePrompt(); });
+        
+        async function showGenerateDialog(targetMesId = undefined) {
+            const s = extension_settings[extensionName];
+            const defaultPersp = s.promptPerspective || "scene";
+            
+            let perspInst = "";
+            if (defaultPersp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
+            else if (defaultPersp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
+            else perspInst = "Describe the entire environment and atmosphere.";
+
+            const titleText = targetMesId !== undefined ? "Generate Scene Image" : "Visualize Current Scene";
+            const descText = targetMesId !== undefined 
+                ? "Generate an image based on the chat history leading up to and including this message."
+                : "Generate an image based on the current chat history.";
+
+            const $content = $(`
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                <p><b>${titleText}</b></p>
+                <p><i>${descText}</i></p>
+                
+                <label><b>Perspective Override:</b></label>
+                <textarea class="text_pole kazuma_custom_persp" rows="3" style="width:100%; resize:vertical; font-family:monospace;">${perspInst}</textarea>
+                </div>
+            `);
+
+            let finalPersp = perspInst;
+            $content.find('.kazuma_custom_persp').on('input', function() { finalPersp = $(this).val(); });
+
+            const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Custom Scene Generation", { okButton: "Generate", cancelButton: "Cancel" });
+            const confirmed = await popup.show();
+
+            if (confirmed) {
+                onGeneratePrompt({ 
+                    targetMesId: targetMesId, 
+                    customPersp: finalPersp 
+                });
+            }
+        }
+
+        $(document).on("click", "#kazuma_quick_gen", function(e) { e.preventDefault(); e.stopPropagation(); showGenerateDialog(); });
 
         // Hover button for generating image from specific historical message
         $(document).on("mouseenter", ".mes", function() {
@@ -1449,49 +1488,7 @@ jQuery(async () => {
                     e.preventDefault(); e.stopPropagation();
                     const mesId = $(this).closest('.mes').attr('mesid');
                     if (!mesId) return;
-                    
-                    const s = extension_settings[extensionName];
-                    const defaultPersp = s.promptPerspective || "scene";
-                    const defaultStyle = s.promptStyle || "standard";
-                    
-                    let perspInst = "", styleInst = "";
-                    if (defaultPersp === "pov") perspInst = "Describe the scene from a First Person (POV) perspective, looking at the character.";
-                    else if (defaultPersp === "character") perspInst = "Focus intensely on the character's appearance and expression, ignoring background details.";
-                    else perspInst = "Describe the entire environment and atmosphere.";
-
-                    if (defaultStyle === "illustrious") styleInst = "Use Booru-style tags (e.g., 1girl, solo, blue hair). Focus on anime aesthetics.";
-                    else if (defaultStyle === "sdxl") styleInst = "Use natural language sentences. Focus on photorealism and detailed textures.";
-                    else if (defaultStyle === "krea2") styleInst = KREA2_INSTRUCTION;
-                    else styleInst = "Use a list of detailed keywords/descriptors.";
-                    
-                    const $content = $(`
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <p><b>Generate Scene Image</b></p>
-                        <p><i>Generate an image based on the chat history leading up to and including this message.</i></p>
-                        
-                        <label><b>Perspective Override:</b></label>
-                        <textarea class="text_pole kazuma_custom_persp" rows="2" style="width:100%; resize:vertical; font-family:monospace;">${perspInst}</textarea>
-                        
-                        <label><b>Style Constraint Override:</b></label>
-                        <textarea class="text_pole kazuma_custom_style" rows="2" style="width:100%; resize:vertical; font-family:monospace;">${styleInst}</textarea>
-                        </div>
-                    `);
-
-                    let finalPersp = perspInst;
-                    let finalStyle = styleInst;
-                    $content.find('.kazuma_custom_persp').on('input', function() { finalPersp = $(this).val(); });
-                    $content.find('.kazuma_custom_style').on('input', function() { finalStyle = $(this).val(); });
-
-                    const popup = new Popup($content, POPUP_TYPE.CONFIRM, "Custom Scene Generation", { okButton: "Generate", cancelButton: "Cancel" });
-                    const confirmed = await popup.show();
-
-                    if (confirmed) {
-                        onGeneratePrompt({ 
-                            targetMesId: parseInt(mesId, 10), 
-                            customPersp: finalPersp, 
-                            customStyle: finalStyle 
-                        });
-                    }
+                    showGenerateDialog(parseInt(mesId, 10));
                 });
                 
                 // Usually ST puts the extra buttons before the edit/delete buttons
